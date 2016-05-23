@@ -575,6 +575,7 @@ setImmediate $app.init.bootstrap = ->
   unless $fs.existsSync(p = $path.join conf,'modules')
     $fs.symlinkSync $path.join(__dirname), p
   unless $fs.existsSync(p = $path.join conf,'package.json')
+    try $fs.unlinkSync p
     $fs.symlinkSync $path.join($path.modules,'package.json'), p
   # process.env.PATH
   system = process.env.PATH.split(':').filter $fs.existsSync
