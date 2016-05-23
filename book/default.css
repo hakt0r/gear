@@ -1,0 +1,44 @@
+body {background: #F3BB1C;}
+button{
+  background: #FFE69D;
+  font-weight:bold;
+  border-radius: 5px; }
+#status {
+  position:relative;
+  padding: 5px; }
+#status #input {
+  background: #FFE69D;
+  padding:5px;
+  display:block;
+  min-width: 100%; }
+#status button {
+  position: absolute;
+  right:0px;
+  bottom: -12px; }
+
+.message {
+  border-radius: 5px;
+  margin-top: 2px;
+  background: #F3B11C;
+  padding: 5px;
+  min-height: 16px; }
+.message label.channel,
+.message label.date,
+.message label.from {
+  font-size: 80%;
+  font-weight:bold;
+  float: left;
+  margin-right: 10px;
+  font-family: sans-serif; }
+.message audio,
+.message video,
+.message img { margin: 5px 0; max-width: 100%; min-width: 100%; }
+.message label.date,
+.message label.channel { float: right; opacity: 0.6; }
+.message p.body {
+  margin: 0;
+  font-family: sans-serif;
+  padding: 5px;}
+
+#feed { width: 66%; }
+#peer { width: 33%; position: fixed; right:0px; top: 90px; }
