@@ -5,6 +5,9 @@ run:
 cached:
 	node ${HOME}/.config/gear/cache/gear.js daemon -D
 
+release:
+	node ${HOME}/.config/gear/cache/gear.js daemon
+
 install:
 	coffee gear.coffee install 2>&1
 

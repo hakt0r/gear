@@ -60,7 +60,7 @@ $app.on daemon:->
   $web.https.on 'request', (req,res)->
     if false is $auth.verify req, req.client, true
       console.log 'REJECT'
-      res.end ''
+      return res.end ''
     res.cert  = req.cert
     res.group = req.group
     $web.apply @, arguments

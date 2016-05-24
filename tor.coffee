@@ -24,70 +24,44 @@ return unless $require ->
   @mod 'task'
   @mod 'auth' unless $config.hostid and $config.hostid.onion
 
-$path.tor = $path.join $path.configDir,'tor'
-pr = $path.join $path.tor, 'private_key'
-pp = $path.join $path.tor, 'public_key'
-rc = $path.join $path.tor, 'torrc'
+$path.tor   = $path.join $path.configDir,'tor'
+$path.torrc = $path.join $path.tor, 'torrc'
 
-$bool = (val,def)-> if val then val isnt 'false' else def
-
-$config.tor        = $config.tor        || {}
-$config.tor.port   = $config.tor.port   || 2004
-$config.tor.ctrl   = $config.tor.ctrl   || 2005
-$config.tor.active = $bool $config.tor.active, true
+$config.tor        = $config.tor      || {}
+$config.tor.port   = $config.tor.port || 2004
+$config.tor.ctrl   = $config.tor.ctrl || 2005
+$config.tor.active = Boolean.default $config.tor.active, true
 
 $app.on tor:
   connecting: (p)-> console.log 'tor[' + $config.hostid.onion + ':' + p + '0%]'
   connected:     -> console.log 'tor[' + $config.hostid.onion + ':online]'
 
-$app.once 'tor:connecting', ->
-  console.log "tor: " + ' connecting ' + $config.hostid.onion
-
-$config.tor.active = yes
-$app.emit 'tor:connected'
-
 $app.on 'daemon', ->
   return if $config.tor.active is false
-  deps = 0
-  $async.series [
-    (s)-> $async.parallel [
-      (c)-> $fs.exists pr, (exists)-> deps++ if exists; do c
-      (c)-> $fs.exists pp, (exists)-> deps++ if exists; do c ], s
-    (s)->
-      return do s if deps is 2
-      $fs.mkdirp $path.dirname(pr), (error)->
-        process.exit 1, console.error error if error
-        o = $onion()
-        $async.parallel [
-          (c)-> $fs.writeFile pr, o.pem, c
-          (c)-> $fs.writeFile pp, o.pem_public, c ], s
-    (c)-> $fs.chmod $path.tor, parseInt('700',8), c
-    (c)-> $fs.readFile pp, (error,data)->
-      process.exit 1, console.error error if error
-      $config.hostid.onion = $onion( data.toString 'utf8' ).onion
-      do c
-    (c)-> $fs.writeFile rc, """
-        SocksPort #{$config.tor.port}
-        CookieAuthentication 1
-        ControlPort #{$config.tor.ctrl}
-        DataDirectory #{$path.join $path.configDir,'tor'}
-        HiddenServiceDir #{$path.join $path.configDir,'tor'}
-        HiddenServicePort 22
-        HiddenServicePort 2003\n
-      """, c
-  ], ->
-    do $app.sync
-    $app.emit 'tor:setup'
-    new Process
-      name:'tor'
-      command: [ $which('tor'),'-f',rc]
-      autostart: $config.tor.active is true
-      filter:->
-        highest = 0
-        log = (args)-> for line in args.trim().split('\n')
-          if ( r = line.match /([0-9]{1,3}?)%/ )
-            r = highest = Math.max highest, Math.floor .1 * parseInt r
-            $app.emit 'tor:connecting', r
-            $app.emit 'tor:connected' if r is 10
-          else console.log 'tor', line
-        [@instance.stdout,@instance.stderr].map (io)-> io.on 'data', log
+  return unless $fs.existsSync path = $path.ca 'me_onion.pub'
+  o = $onion $fs.readFileSync path, 'utf8'
+  $config.hostid.onion = o.onion
+  $fs.mkdirp.sync path unless $fs.existsSync path = $path.tor
+  $fs.chmodSync path, parseInt '700', 8
+  $fs.writeFileSync $path.torrc, """
+  SocksPort #{$config.tor.port}
+  CookieAuthentication 1
+  ControlPort #{$config.tor.ctrl}
+  DataDirectory #{$path.join $path.configDir,'tor'}
+  HiddenServiceDir #{$path.join $path.configDir,'tor'}
+  HiddenServicePort 22
+  HiddenServicePort 2003
+  """ unless $fs.existsSync $path.torrc
+  $fs.symlinkSync $path.ca('me_onion.pem'), path unless $fs.existsSync path = $path.join $path.tor, 'private_key'
+  $fs.symlinkSync $path.ca('me_onion.pub'), path unless $fs.existsSync path = $path.join $path.tor, 'public_key'
+  do $app.sync
+  $app.emit 'tor:setup'
+  new Process name:'tor', command: [ $which('tor'),'-f',$path.torrc], autostart:on, filter:->
+    highest = 0
+    log = (args)-> for line in args.trim().split('\n')
+      if ( r = line.match /([0-9]{1,3}?)%/ )
+        r = highest = Math.max highest, Math.floor .1 * parseInt r
+        $app.emit 'tor:connecting', r
+        $app.emit 'tor:connected' if r is 10
+      else console.debug 'tor', line
+    [@instance.stdout,@instance.stderr].map (io)-> io.on 'data', log

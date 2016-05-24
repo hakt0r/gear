@@ -24,9 +24,11 @@ return unless $require -> @npm 'mime', 'serve-static'
 $static PEER: $config.peers || $config.peers = {}
 
 PEER[$config.hostid.irac] = $config.hostid
-$config.hostid.direct = true
 
-$static Peer: (irac)-> PEER[irac] || irac:irac
+$static Peer: (irac)-> PEER[irac] || false
+
+Peer.fromNodeCert = (cert)->
+  return
 
 Peer.defaultGroups = (peer)->
   peer.group = Array.unique ( peer.group || [] ).concat ['$peer']
@@ -50,28 +52,39 @@ Peer.readOpts = (peer,msg) ->
   peer.remoteSync = opts.sync         if opts.sync?
   opts
 
-Peer.probe = (peer) -> if peer.cert? and ( typeof peer.cert is 'string' ) and peer.onion?
-  # console.debug ' PROBE '.yellow.inverse.bold, peer
+Peer.probe = (peer) ->
+  console.debug Peer.format(peer), ' PROBE '.yellow.inverse.bold
   Peer.sync peer
   null
 
 Peer.probe.all = ->
-  Peer.probe peer for k,peer of PEER when peer.irac isnt $config.hostid.irac
+  for k,peer of PEER
+    console.log k
+    if k isnt $config.hostid.irac
+      Peer.probe peer
   null
 
+Peer.format = (peer)->
+  o = []
+  o.push peer.root.substr(0,6).green.bold if peer.root
+  o.push peer.ia.substr(0,2).yellow if peer.ia
+  o.push peer.host.substr(0,6).yellow.bold if peer.host
+  o.push peer.onion.white if peer.onion
+  o.push '[' + peer.address.yellow.bold + ']' if peer.address
+  o.join '.'
 
 Peer.sync = (peer,callback)-> want = offer = null; $async.series [
   (c)->
-    console.log 'IRAC-SYNCING-WITH', peer.irac, peer.remoteHead
+    console.log Peer.format(peer), 'IRAC-SYNCING-WITH', peer.remoteHead
     Request peer, [
       'irac_sync', opts: Peer.opts peer
     ], (error,request,msg)->
       unless error
-        console.hardcore 'SYNC-REPLY', peer.irac, msg
+        console.hardcore Peer.format(peer), 'SYNC-REPLY', msg
         Peer.readOpts peer, msg
         offer = Channel.sync    peer, peer.remoteSync
         want  = Channel.compare peer, msg
-        console.hardcore 'SYNC-WANT', peer.irac, want
+        console.hardcore Peer.format(peer), 'SYNC-WANT', want
       c error
   (c)-> Peer.get peer, want, offer, c
   -> do callback if callback ]
@@ -84,7 +97,7 @@ Peer.get = (peer,want,offer,callback)->
     do callback if callback
     return false
   Request peer, ['irac_trade',want,offer], (error,request,result)->
-    console.hardcore 'SYNC-GOT', peer.irac, result
+    console.hardcore Peer.format(peer), 'SYNC-GOT', result
     Channel.push peer, result unless error
     callback error, request, result if callback
   true
@@ -115,9 +128,9 @@ class SyncQueue
   @publish: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
     for irac, channels of SyncQueue.byIRAC
       continue unless peer = PEER[irac]
-      console.hardcore 'IRAC-PUSHING', irac, channels
+      console.hardcore Peer.format(peer), 'IRAC-PUSHING', channels
       Request peer, ['irac_trade',null,channels,Channel.update], ->
-        console.hardcore 'IRAC-PUSHED', irac, channels
+        console.hardcore Peer.format(peer), 'IRAC-PUSHED', channels
       SyncQueue.byIRAC[irac] = {}
     done null
 
@@ -176,7 +189,7 @@ Channel.init = ->
 
 Channel.sync = (peer,date)->
   response = {}
-  for c in peer.sub when ch = @byName[c]
+  for c in Peer.subscribe(peer) when ch = @byName[c]
     response[c] = ch.sync(date)
     delete response[c] if response[c].length is 0
   response
@@ -229,32 +242,33 @@ Channel.byName.peer = new LivePeer
 
 
 
-$command irac_peer: $group '$public', (irac,onion,ca,csr,ack)->
-  return no  if PEER[irac] and $$.cert.irac isnt irac
-  return yes if PEER[irac] and PEER[irac].local and PEER[irac].remote
+$command irac_peer: $group '$public', (ca,ack)->
+  { irac, root, host, onion, ia } = $auth.parseCertificate $$.cert, ca
   if ack?
-    PEER[irac] = peer = irac:irac, onion:onion, ca:ca, cert:ack, remote: hisCert = $auth.authorize(csr)
+    return yes if PEER[irac] and PEER[irac].local and PEER[irac].remote
+    PEER[irac] = peer = irac:irac, root:root, host:host, ia:ia, onion:onion, ca:ca, cert:ack, remote:hisCert = $auth.authorize $$.cert
     Peer.defaultGroups peer
-    console.log ' PEERED-WITH '.blue.bold.inverse, irac
+    console.log Peer.format(peer), ' PEERED-WITH '.blue.bold.inverse, peer
     setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
-    PEER[irac].cert = ack
+    do $app.sync
     return hisCert
   # return no if PEER[irac]?
-  PEER[irac] = peer = irac:irac, onion:onion, ca:ca, cert:no, remote: hisCert = $auth.authorize(csr)
+  PEER[irac] = peer = irac:irac, root:root, host:host, ia:ia, onion:onion, ca:ca, cert:no, remote: hisCert = $auth.authorize $$.cert
   Peer.defaultGroups peer
   Request.static peer, [
-    'irac_peer', $config.hostid.irac, $config.hostid.onion, $config.hostid.cachain, $auth.request(), hisCert
+    'irac_peer', $config.hostid.cachain, hisCert
   ], (error,req,myCert)->
     return console.error error if error
-    console.log ' PEERED-WITH '.green.bold.inverse, irac
+    console.log Peer.format(peer), ' PEERED-WITH '.green.bold.inverse, peer
     peer.cert = myCert
     Peer.sync peer, (error)-> # TODO: distrust on error
+    do $app.sync
     null
   'calling_back'
 
 $command irac_sync: $group '$peer', (msg)->
   return false unless peer = PEER[irac = $$.cert.irac]
-  console.log 'IRAC-SYNC', peer.irac, msg
+  console.log Peer.format(peer), 'IRAC-SYNC', msg
   Peer.readOpts peer, msg
   o = Channel.sync peer, peer.remoteSync
   o.opts = Peer.opts peer
@@ -262,7 +276,7 @@ $command irac_sync: $group '$peer', (msg)->
 
 $command irac_trade: $group '$peer', (want,offer,remoteHead)->
   return false unless peer = PEER[irac = $$.cert.irac]
-  console.log 'IRAC-TRADE', irac, want, offer
+  console.log Peer.format(peer), 'IRAC-TRADE', want, offer
   Peer.get peer, Channel.compare(peer,offer) if offer?
   peer.remoteHead = remoteHead               if remoteHead?
   return Channel.get peer, want              if want?
@@ -293,11 +307,9 @@ $command irac_get: $group '$peer', (msg)->
 
 
 
-$command peer: (address)->
+$command peer: Peer.requestAuth = (address)->
   return 'ENOPEER' unless address
-  Request.static { address:address, local:yes }, [
-    'irac_peer', $config.hostid.irac, $config.hostid.onion, $config.hostid.cachain, $auth.request()
-  ], (error,req,body)->
+  Request.static { address:address, local:yes }, [ 'irac_peer', $config.hostid.cachain ], (error,req,body)->
     return console.log error if error
   'calling_' + address
 
@@ -346,3 +358,46 @@ $command sync: (irac)->
   peer = PEER[irac] if irac
   Peer.sync peer
   true
+
+$command ssh_empeer: process.cli.ssh_empeer = (host)->
+  hostname = $md5 host; peer = null
+  $async.series [
+    (c)=> $cp.exec """ssh #{host} hostname""", => do c
+    (c)=> c null, peer = $auth.setupKeys $md5 host
+    (c)=> $cp.exec """
+      cd #{$path.configDir} &&
+      tar cjvf - ca/ca.pem ca/intermediate_ca.pem ca/#{hostname}* modules/* |
+      ssh #{host} 'cd ; cat - > .peer_setup.tbz'
+    """, => do c
+    (c)=> $cp.ssh( host, """
+      [ -f .peer_setup.tbz ] || exit 1
+      cd; rm -rf .config/gear/modules .config/gear/ca
+      cd .config/gear/ && tar xjvf ../../.peer_setup.tbz &&
+      cd && rm .peer_setup.tbz
+      cd .config/gear/ca; rm -f me*; rename 's/#{hostname}/me/' *
+      cd; touch  .config/gear/ca/ca_outlet
+      cd; coffee .config/gear/modules/gear.coffee install
+    """ ).on 'close', => do c
+    (c)=>
+      dns._lookup host, {}, (e,ip,type) ->
+        DIRECT[peer.host] = ip
+        Peer.sync PEER[peer.host] =
+          name:host
+          irac:peer.host
+          host:peer.host
+          root:peer.irac
+          group:['$host']
+          onion:peer.onion
+          address:peer.host
+          local:on
+        null ]
+
+$static DIRECT: {}, dns: require 'dns'
+unless dns._lookup
+  dns._lookup = dns.lookup
+  dns.lookup = (hostname,options,callback)->
+    ( callback = options; options = {} ) unless callback?
+    if ip = DIRECT[hostname]
+      console.log 'DNS', arguments
+      callback null, ip, 4
+    else dns._lookup.apply dns, arguments

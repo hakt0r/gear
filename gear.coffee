@@ -462,7 +462,7 @@ $require.Module = class GEARModule
     $require.Module.byPath[@path] = $require.Module.byName[@name = $require.modName @path] = @
     require @path
     if ( @deps and @loaded ) or ( not @deps? )
-      console.debug '\x1b[33mmodule\x1b[0m', @name, @loaded, @deps?
+      console.hardcore '\x1b[33mmodule\x1b[0m', @name, @loaded, @deps?
       return @loaded = true
     @loaded = false
   reload: ->
@@ -508,7 +508,6 @@ $require.npm = $function
     for k in list
       if k.match ' '
         [ k, url ] = k.split ' '
-        console.log k, url
         n.source[k] = url
       n.list[k] = true
       n.queue[k] = n.list[k] = wait = true unless $fs.existsSync $path.join $path.node_modules, k
@@ -695,24 +694,24 @@ $app.init.corelib.config = ->
       $async.series [
         (c)=> $fs.exists @basedir, (exists)=>
           return do c if exists
-          console.log 'CONFIG-MKDIR'
+          console.hardcore 'CONFIG-MKDIR'
           $fs.mkdirp @basedir, c
         (c)=> $fs.exists @path, (exists)=>
           return do c unless exists
-          console.log 'CONFIG-READING', @path
+          console.hardcore 'CONFIG-READING', @path
           $fs.readFile @path, (error,data)=>
             process.exit 1, console.error 'STORAGE-READ', @path, error if error
             try @data = $bson.deserialize data; do c
             catch error then process.exit 1, console.error 'STORAGE-PARSE-ERROR', @path, error, error.stack
         (c)=>
-          console.log 'CONFIG-DONE', @path
+          console.hardcore 'CONFIG-DONE', @path
           @data = @data || @default; @onread @data; @emit 'read', @data ]
       null
 
     stringify: (data)-> $bson.serialize data
     write: (cue,done)->
-      return console.log 'CONFIG-NO-DATA', @path unless @data
-      console.log 'CONFIG-WRITE', @path
+      return console.error 'CONFIG-NO-DATA', @path unless @data
+      console.hardcore 'CONFIG-WRITE', @path
       data = if @_filter then @_filter @data else @data
       data = data.map( (o)-> c = {}; c[k] = v for k,v of o; delete c.uid; c ) if data.map
       temp = @path + '.tmp'
@@ -721,7 +720,7 @@ $app.init.corelib.config = ->
         (c)=> $fs.writeFile temp, d, c
         (c)=> $fs.rename temp, @path, c
       ], =>
-        console.log 'CONFIG-WRITE-DONE', @path
+        console.hardcore 'CONFIG-WRITE-DONE', @path
         done null
       null
     writeSync:->
@@ -761,7 +760,10 @@ $app.init.corelib.config = ->
 
 ### $util enhancements ###
 $util.print = -> process.stdout.write arguments[0]
-$util.debuglog = $util.debuglog || -> -> # FIXME
+$util.debuglog = $util.debuglog || -> ->
+
+### Type enhancements ###
+Boolean.default = (val,def)-> if val then val isnt 'false' else def
 
 ### Array enhancements ###
 Array.last    =   (a) -> a[a.length-1]
