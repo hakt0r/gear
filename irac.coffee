@@ -21,15 +21,6 @@
 
 return unless $require -> @npm 'mime', 'serve-static'
 
-$static PEER: $config.peers || $config.peers = {}
-
-PEER[$config.hostid.irac] = $config.hostid
-
-$static Peer: (irac)-> PEER[irac] || false
-
-Peer.fromNodeCert = (cert)->
-  return
-
 Peer.defaultGroups = (peer)->
   peer.group = Array.unique ( peer.group || [] ).concat ['$peer']
 
@@ -63,15 +54,6 @@ Peer.probe.all = ->
     if k isnt $config.hostid.irac
       Peer.probe peer
   null
-
-Peer.format = (peer)->
-  o = []
-  o.push peer.root.substr(0,6).green.bold if peer.root
-  o.push peer.ia.substr(0,2).yellow if peer.ia
-  o.push peer.host.substr(0,6).yellow.bold if peer.host
-  o.push peer.onion.white if peer.onion
-  o.push '[' + peer.address.yellow.bold + ']' if peer.address
-  o.join '.'
 
 Peer.sync = (peer,callback)-> want = offer = null; $async.series [
   (c)->
@@ -243,18 +225,16 @@ Channel.byName.peer = new LivePeer
 
 
 $command irac_peer: $group '$public', (ca,ack)->
-  { irac, root, host, onion, ia } = $auth.parseCertificate $$.cert, ca
+  { irac, root, host, onion, ia } = peer = new Peer $auth.parseCertificate($$.peer.cert,ca), {}
   if ack?
-    return yes if PEER[irac] and PEER[irac].local and PEER[irac].remote
-    PEER[irac] = peer = irac:irac, root:root, host:host, ia:ia, onion:onion, ca:ca, cert:ack, remote:hisCert = $auth.authorize $$.cert
-    Peer.defaultGroups peer
+    return yes if peer and peer.local and peer.remote
+    Object.assign peer, cert:ack, remote:hisCert = $auth.authorize $$.peer.cert
     console.log Peer.format(peer), ' PEERED-WITH '.blue.bold.inverse, peer
     setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
     do $app.sync
     return hisCert
   # return no if PEER[irac]?
-  PEER[irac] = peer = irac:irac, root:root, host:host, ia:ia, onion:onion, ca:ca, cert:no, remote: hisCert = $auth.authorize $$.cert
-  Peer.defaultGroups peer
+  Object.assign cert:no, remote: hisCert = $auth.authorize $$.peer.cert
   Request.static peer, [
     'irac_peer', $config.hostid.cachain, hisCert
   ], (error,req,myCert)->
@@ -267,7 +247,7 @@ $command irac_peer: $group '$public', (ca,ack)->
   'calling_back'
 
 $command irac_sync: $group '$peer', (msg)->
-  return false unless peer = PEER[irac = $$.cert.irac]
+  return false unless peer = $$.peer
   console.log Peer.format(peer), 'IRAC-SYNC', msg
   Peer.readOpts peer, msg
   o = Channel.sync peer, peer.remoteSync
@@ -275,7 +255,7 @@ $command irac_sync: $group '$peer', (msg)->
   o
 
 $command irac_trade: $group '$peer', (want,offer,remoteHead)->
-  return false unless peer = PEER[irac = $$.cert.irac]
+  return false unless peer = $$.peer
   console.log Peer.format(peer), 'IRAC-TRADE', want, offer
   Peer.get peer, Channel.compare(peer,offer) if offer?
   peer.remoteHead = remoteHead               if remoteHead?
@@ -377,19 +357,12 @@ $command ssh_empeer: process.cli.ssh_empeer = (host)->
       cd .config/gear/ca; rm -f me*; rename 's/#{hostname}/me/' *
       cd; touch  .config/gear/ca/ca_outlet
       cd; coffee .config/gear/modules/gear.coffee install
-    """ ).on 'close', => do c
+    """ ); setTimeout (-> do c), 3000
     (c)=>
       dns._lookup host, {}, (e,ip,type) ->
-        DIRECT[peer.host] = ip
-        Peer.sync PEER[peer.host] =
-          name:host
-          irac:peer.host
-          host:peer.host
-          root:peer.irac
-          group:['$host']
-          onion:peer.onion
-          address:peer.host
-          local:on
+        DIRECT[peer.irac] = ip
+        Peer.sync new Peer $auth.parseCertificate(peer.cert,$config.hostid.cachain),
+          name:host, group:['$host'], address:peer.irac, local:on
         null ]
 
 $static DIRECT: {}, dns: require 'dns'

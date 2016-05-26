@@ -53,7 +53,7 @@ $app.on daemon:->
     requestCert: yes
     rejectUnauthorized: no
     ca:   $config.hostid.cachain
-    key:  $config.hostid.key
+    key:  $config.hostid.pem
     cert: $config.hostid.cert )
   WebSocketServer = require('ws').Server
   $web.wss = new WebSocketServer server:$web.https
@@ -61,8 +61,6 @@ $app.on daemon:->
     if false is $auth.verify req, req.client, true
       console.log 'REJECT'
       return res.end ''
-    res.cert  = req.cert
-    res.group = req.group
     $web.apply @, arguments
   $web.use do require('compression') unless $config.web.disableCompression
   $web.use do require('body-parser').json
@@ -77,9 +75,11 @@ $app.on 'web:listening', -> $web.get '/rpc/*', (rx,tx,nx)->
     opts = JSON.parse decodeURIComponent args[l]
     do args[l] = opts # this will enact opts no nee for a catch
   # console.hardcore 'GET-RPC', typeof args, $util.inspect args
-  new $rpc.scope web:{req:rx,res:tx,next:nx}, group:rx.group, cert:rx.cert, cmd:args, reply:$web.REPLY rx,tx
+  peer = rx.peer
+  new $rpc.scope web:{req:rx,res:tx,next:nx}, group:peer.group, peer:peer, cmd:args, reply:$web.REPLY rx,tx
 
 $app.on 'web:listening', -> $web.post '/rpc', (rx,tx,nx)->
   # console.hardcore 'POST-RPC', typeof rx.body, $util.inspect rx.body
-  new $rpc.scope web:{req:rx,res:tx,next:nx}, group:rx.group, cert:rx.cert, cmd:rx.body, reply:$web.REPLY rx,tx
+  peer = rx.peer
+  new $rpc.scope web:{req:rx,res:tx,next:nx}, group:peer.group, peer:peer, cmd:rx.body, reply:$web.REPLY rx,tx
   $app.emit 'web:start'

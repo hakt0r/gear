@@ -93,8 +93,8 @@ Request.tlsOpts = (peer,protocol)->
   opts.peer = peer
   opts.requestCert = yes
   opts.rejectUnauthorized = yes
-  opts.key = $config.hostid.key
-  opts.ca = if peer.ca then peer.ca else $config.hostid.cachain
+  opts.key = $config.hostid.pem
+  opts.ca = if peer.cachain then peer.cachain else $config.hostid.cachain
   opts.cert = peer.cert || $config.hostid.cert
   if peer.local is on
     opts.url = protocol + '://' + peer.address + ':2003/rpc/'
@@ -149,7 +149,8 @@ Request.connect = (peer) -> do req = ->
       return socket.close()
     # console.debug 'IRAC-WSC-CONNECT', irac
     socket.removeListener 'error', connect_error
-    Request.acceptSocket socket, peer
+    if socket.peer.irac is peer.irac
+      Request.acceptSocket socket
     null
   socket.on 'error', connect_error = (error)->
     return Request.retry 10000, req if error      is 'SOCKS: Host unreachable'
@@ -162,11 +163,10 @@ Request.connect = (peer) -> do req = ->
 
 ERROR = -1; REQUEST = 0; RESPONSE = 1
 
-Request.acceptSocket = (socket,peer)->
-  unless socket.irac is $config.hostid.irac
-    ( console.error 'IRAC-REQUEST-NO-PEER';  return false ) unless ( peer = peer || PEER[socket.cert.irac] )
-    ( console.debug 'IRAC-WS-ALREADY-CONNECTED'; return false ) if Request.socket[peer.irac]
-  else peer = $config.hostid
+Request.acceptSocket = (socket)->
+  { peer } = socket; { irac } = peer
+  ( console.error 'IRAC-REQUEST-NO-PEER';  return false ) unless peer?
+  ( console.debug 'IRAC-WS-ALREADY-CONNECTED'; return false ) if Request.socket[peer.irac]
   console.hardcore 'IRAC-WS-ACCEPT', peer.irac
 
   delete Request.connecting[irac]
@@ -197,7 +197,7 @@ Request.acceptSocket = (socket,peer)->
 
     if msgType is REQUEST
       # console.hardcore 'IRAC-WS-RPC', uid, msg
-      rpc = new $rpc.scope ws:socket, group:socket.group, cert:socket.cert, cmd:msg, reply: (args...)->
+      rpc = new $rpc.scope ws:socket, group:socket.peer.group, peer:peer, cmd:msg, reply: (args...)->
         socket.send [RESPONSE,uid,args]
 
     else if ( msgType is RESPONSE ) and ( queue = Request.active[irac] )?
