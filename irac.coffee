@@ -137,7 +137,7 @@ $static class Channel
       @update = Math.max item.date, @update
       @byHash[item.hash] = item
     Channel.update = Math.max @update, Channel.update || 0
-    # console.log " NEW CHANNEL ".red, @name, @list.length, @update, Channel.update
+    # console.log ' NEW CHANNEL '.red, @name, @list.length, @update, Channel.update
     do $app.sync
   sync:(date)-> i.hash for i in @list when i.date > date
   push:(source,items...)->
@@ -212,7 +212,7 @@ $static class LivePeer
     Array.remove @list, peer
     delete @byHash[peer.irac]
   push: (peer)-> unless @byHash[peer.irac]
-    @list.push item: item = @byHash[peer.irac] = from:peer.irac, date: peer.lastSeen || 0
+    @list.push item: item = @byHash[peer.irac] = root:peer.root, from:peer.irac, date: peer.lastSeen || 0
     SyncQueue.distribute null, 'peer', [item]
 
 Channel.byName.peer = new LivePeer
@@ -227,7 +227,7 @@ Channel.byName.peer = new LivePeer
 $command irac_peer: $group '$public', (ca,ack)->
   { irac, root, host, onion, ia } = peer = new Peer $auth.parseCertificate($$.peer.cert,ca), {}
   if ack?
-    return yes if peer and peer.local and peer.remote
+    return yes if peer and peer.remote
     Object.assign peer, cert:ack, remote:hisCert = $auth.authorize $$.peer.cert
     console.log Peer.format(peer), ' PEERED-WITH '.blue.bold.inverse, peer
     setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
@@ -290,7 +290,7 @@ $command irac_get: $group '$peer', (msg)->
 $command peer: Peer.requestAuth = (address)->
   return 'ENOPEER' unless address
   Request.static { address:address, local:yes }, [ 'irac_peer', $config.hostid.cachain ], (error,req,body)->
-    return console.log error if error
+    return console.error error if error
   'calling_' + address
 
 $command share: (channel,file)->
@@ -359,18 +359,6 @@ $command ssh_empeer: process.cli.ssh_empeer = (host)->
       cd; coffee .config/gear/modules/gear.coffee install
     """ ); setTimeout (-> do c), 3000
     (c)=>
-      dns._lookup host, {}, (e,ip,type) ->
-        DIRECT[peer.irac] = ip
-        Peer.sync new Peer $auth.parseCertificate(peer.cert,$config.hostid.cachain),
-          name:host, group:['$host'], address:peer.irac, local:on
-        null ]
-
-$static DIRECT: {}, dns: require 'dns'
-unless dns._lookup
-  dns._lookup = dns.lookup
-  dns.lookup = (hostname,options,callback)->
-    ( callback = options; options = {} ) unless callback?
-    if ip = DIRECT[hostname]
-      console.log 'DNS', arguments
-      callback null, ip, 4
-    else dns._lookup.apply dns, arguments
+      delete peer.cert; delete peer.key; delete peer.pem
+      Peer.sync new Peer peer, name:host, group:['$host'], address:host
+      null ]

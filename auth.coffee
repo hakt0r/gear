@@ -86,19 +86,21 @@ $static
     key = key || $auth.cakey.publicKey
     $B32 new Buffer pki.getPublicKeyFingerprint(key,md:sha256.create()).data, 'binary'
 
-$config.peers = $config.peers = {}
+$config.peers = $config.peers || {}
 
 $static class Peer
   constructor:(auth,settings)->
     return false if false is auth
-    return peer.update(auth,settings) if peer = PEER[auth.irac]
-    Object.assign @, settings, auth
-    do @groups
+    if (peer = PEER[auth.irac])? and peer.update
+      return peer.update(auth,settings)
+    else @update auth, settings
     Peer.byIRAC[@irac] = @
     Peer.pushCA @root, @
-    console.log ' PEER '.blue.bold.inverse, Peer.format @
+    console.log ' PEER '.blue.bold.inverse, Peer.format(@), typeof @pem
   update:(auth,settings)->
-    Object.assign @, settings, auth; @
+    Object.assign @, settings, auth; do $app.sync; @
+    do @groups
+    do $app.sync
   groups:(group)->
     @group = @group || ['$public']
     @group = @group.concat ['$public','$peer','$buddy','$host'] unless -1 is @group.indexOf '$local'
@@ -107,7 +109,8 @@ $static class Peer
     @group = @group.concat ['$public']                          unless -1 is @group.indexOf '$peer'
     @group = Array.unique @group
 
-$static PEER: Peer.byIRAC = {}
+$static PEER: Peer.byIRAC = $config.peers
+
 Peer.byCA = {}
 
 Peer.format = (peer)->
@@ -118,7 +121,7 @@ Peer.format = (peer)->
   o.push peer.onion.white.bold if peer.onion
   o = o.join '.'
   if peer.address
-    o + '[' + ( if peer.address is peer.irac then DIRECT[peer.address] else peer.address ).yellow.bold + ']'
+    o + '[' + ( if peer.address is peer.irac then DIRECT[peer.address] || "n/a" else peer.address ).yellow.bold + ']'
   else o
 
 Peer.pushCA = (root,peer)->
@@ -141,7 +144,6 @@ new class Auth
     ca_root = pki.certificateToPem @ca
     cachain = [ca_root, ca_intr]
     Object.assign $config.hostid,
-      pem:     pki.privateKeyToPem(@key.privateKey)
       ca:      ca_intr
       cachain: [ca_root,ca_intr]
       group:   ['$local']
@@ -151,7 +153,8 @@ new class Auth
     console.log ' IRAC '.blue.bold.inverse, Peer.format($config.hostid)
 
     for i,p of $config.peers when i isnt @irac
-      p = new Peer p.cert, p.cachain, p
+      # console.log p
+      p = new Peer {}, p
 
     do $require.Module.byName.auth.resolve
 
@@ -168,7 +171,13 @@ new class Auth
       if ia_crt and ca_crt
         ia_irac = $irac ia_crt.publicKey
         ca_irac = $irac ca_crt.publicKey
-      return cert.parsed = pem:sa_crt, irac:sa_irac, root:ca_irac, ia:ia_irac, host:sa_irac, pub:sa_crt.publicKey, onion:sa_crt.subject.getField('O').value
+      return cert.parsed =
+        pem: pki.certificateToPem sa_crt
+        pub: pki.publicKeyToPem sa_crt.publicKey
+        irac:sa_irac
+        ia:ia_irac
+        root:ca_irac
+        onion:sa_crt.subject.getField('O').value
     catch exception then console.error ' PARSE-CERTIFICATE '.red.bold.inverse, cert, exception.stack || exception
     return false
 
@@ -307,6 +316,7 @@ new class Auth
     exports.irac = $irac exports.key.publicKey
     exports.ia = @ia
     exports.root = @root
+    exports.pem = pki.privateKeyToPem exports.key.privateKey
     exports
 
   installKeys:->

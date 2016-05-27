@@ -22,6 +22,14 @@
 return unless $require ->
   @npm 'socksjs git+https://github.com/hakt0r/socksjs', 'mime'
 
+do -> unless ( dns = require 'dns' )._lookup
+  dns._lookup = dns.lookup
+  dns.lookup = (hostname,options,callback)->
+    ( callback = options; options = {} ) unless callback?
+    if ( peer = PEER[hostname] ) and peer.address
+      dns._lookup peer.address, options, callback
+    else dns._lookup hostname, options, callback
+
 socksjs = require 'socksjs'
 https   = require 'https'
 
@@ -58,14 +66,14 @@ Request.connecting = {}
 Request.connected  = {}
 
 Request.flush = (peer)->
-  return ( console.error 'IRAC-REQUEST-NO-SOCKET'; false ) unless socket = Request.socket[irac = peer.irac]
-  return ( console.error 'IRAC-REQUEST-NO-QUEUE';  false ) unless queue  = Request.queue[irac]
-  return ( console.error 'IRAC-REQUEST-NO-ACTIVE'; false ) unless active = Request.active[irac]
+  return ( console.error 'REQUEST-NO-SOCKET'; false ) unless socket = Request.socket[irac = peer.irac]
+  return ( console.error 'REQUEST-NO-QUEUE';  false ) unless queue  = Request.queue[irac]
+  return ( console.error 'REQUEST-NO-ACTIVE'; false ) unless active = Request.active[irac]
   for request in queue
     request.uid = uid = ++active.counter
     socket.send [REQUEST,uid,request[1]]
     active.push request
-    # console.hardcore 'IRAC-REQUEST-REPLAY', irac, uid, request[1]
+    # console.hardcore 'REQUEST-REPLAY', irac, uid, request[1]
   Request.queue[irac] = []
   true
 
@@ -96,8 +104,8 @@ Request.tlsOpts = (peer,protocol)->
   opts.key = $config.hostid.pem
   opts.ca = if peer.cachain then peer.cachain else $config.hostid.cachain
   opts.cert = peer.cert || $config.hostid.cert
-  if peer.local is on
-    opts.url = protocol + '://' + peer.address + ':2003/rpc/'
+  if peer.address
+    opts.url = protocol + '://' + peer.irac + ':2003/rpc/'
     return opts
   opts.url = protocol + '://' + peer.onion + '.onion:2003/rpc/'
   opts.agent = new Request.Agent opts
@@ -127,7 +135,10 @@ Request.static = (peer,args,callback) ->
     return Request.retry 10000, req if msg      is 'SOCKS: Host unreachable'
     return Request.retry 10000, req if msg      is 'SOCKS: TTL expired'
     return Request.retry 5000,  req if msg.code is 'ECONNREFUSED'
-    console.log "IRAC-REQUEST-ERROR", arguments[0]
+    if msg.code is 'ENOTFOUND' and peer.address
+      delete peer.address
+      return Request.retry 0, req
+    console.error " REQUEST-ERROR ".red.bold.inverse, arguments[0]
   null
 
 Request.pipe = (peer,args,target,callback) ->
@@ -137,17 +148,17 @@ Request.pipe = (peer,args,target,callback) ->
   null
 
 Request.connect = (peer) -> do req = ->
-  return ( console.debug 'IRAC-WSC-ALREADY-CONNECTED';  true  ) if Request.socket[irac = peer.irac]
-  return ( console.debug 'IRAC-WSC-ALREADY-CONNECTING'; false ) if Request.connecting[irac]
+  return ( console.debug ' WSC-ALREADY-CONNECTED '.green.bold.inverse;  true  ) if Request.socket[irac = peer.irac]
+  return ( console.debug ' WSC-ALREADY-CONNECTING '.red.bold.inverse; false ) if Request.connecting[irac]
   session = {}; opts = Request.tlsOpts peer, 'wss'
-  # console.hardcore 'IRAC-WSC-CONNECTING', opts.url
+  # console.hardcore 'WSC-CONNECTING', opts.url
   socket = new Request.WebSocket opts.url, opts
   socket.on 'open', ->
     $auth.verify socket, socket._socket
     if Request.socket[irac]
-      console.debug 'IRAC-WSC-DOUBLE', irac
+      console.debug ' WSC-DOUBLE '.red.bold.inverse, irac
       return socket.close()
-    # console.debug 'IRAC-WSC-CONNECT', irac
+    # console.debug 'WSC-CONNECT', irac
     socket.removeListener 'error', connect_error
     if socket.peer.irac is peer.irac
       Request.acceptSocket socket
@@ -156,7 +167,11 @@ Request.connect = (peer) -> do req = ->
     return Request.retry 10000, req if error      is 'SOCKS: Host unreachable'
     return Request.retry 10000, req if error      is 'SOCKS: TTL expired'
     return Request.retry 5000,  req if error.code is 'ECONNREFUSED'
-    console.error 'IRAC-WSC-CONNECT-ERROR', peer.irac, error
+    if error.code is 'ENOTFOUND' and peer.address
+      console.debug Peer.format(peer).inverse, ' WSC-DISABLE-DIRECT '.yellow.bold.inverse
+      delete peer.address
+      return Request.retry 0, req
+    console.error Peer.format(peer), ' WSC-CONNECT-ERROR '.red.bold.inverse, error
     delete Request.connecting[irac]
     null
   true
@@ -165,9 +180,9 @@ ERROR = -1; REQUEST = 0; RESPONSE = 1
 
 Request.acceptSocket = (socket)->
   { peer } = socket; { irac } = peer
-  ( console.error 'IRAC-REQUEST-NO-PEER';  return false ) unless peer?
-  ( console.debug 'IRAC-WS-ALREADY-CONNECTED'; return false ) if Request.socket[peer.irac]
-  console.hardcore 'IRAC-WS-ACCEPT', peer.irac
+  ( console.error Peer.format(peer), ' REQUEST-NO-PEER '.red.bold.inverse;  return false ) unless peer?
+  ( console.debug Peer.format(peer), ' WSC-ALREADY-CONNECTED '.red.bold.inverse; return false ) if Request.socket[peer.irac]
+  console.hardcore Peer.format(peer), ' WS-ACCEPT '.green.bold.inverse
 
   delete Request.connecting[irac]
   Request.socket[irac = peer.irac] = socket
@@ -177,26 +192,26 @@ Request.acceptSocket = (socket)->
 
   _send = socket.send.bind socket
   socket.send = ->
-    # console.hardcore 'IRAC-WS-SEND', arguments
+    # console.hardcore 'WS-SEND', arguments
     _send JSON.stringify arguments[0]
     # socket.send( $bson.serialize([RESPONSE,uid,message],no,yes,no), binary:on, mask:on )
 
   socket.fail = (error,data)->
-    console.error error, peer.irac, $util.inspect data
+    console.error Peer.format(peer), error, $util.inspect data
     socket.send [ -1, -1, [ error + "\n" + data ] ]
 
   socket.on "message", (m)->
-    # console.hardcore 'IRAC-WS-MESSAGE', peer.irac, $util.inspect arguments
+    # console.hardcore Peer.format(peer), 'WS-MESSAGE', $util.inspect arguments
     try m = JSON.parse m
-    catch e then return console.error "IRAC-WS-INVALID-JSON", peer.irac, $util.inspect m
+    catch e then return console.error Peer.format(peer), ' WS-INVALID-JSON '.red.bold.inverse, $util.inspect m
 
-    return socket.fail 'IRAC-WS-NOT-AN-ARRAY', m unless Array.isArray m
+    return socket.fail Peer.format(peer), ' WS-NOT-AN-ARRAY '.red.bold.inverse, m unless Array.isArray m
 
     [ msgType, uid, msg ] = m
-    return socket.fail 'IRAC-WS-INVALID-STRUCTURE', m unless msgType? and uid? and msg? and msg.push?
+    return socket.fail Peer.format(peer), ' WS-INVALID-STRUCTURE '.red.bold.inverse, m unless msgType? and uid? and msg? and msg.push?
 
     if msgType is REQUEST
-      # console.hardcore 'IRAC-WS-RPC', uid, msg
+      # console.hardcore 'WS-RPC', uid, msg
       rpc = new $rpc.scope ws:socket, group:socket.peer.group, peer:peer, cmd:msg, reply: (args...)->
         socket.send [RESPONSE,uid,args]
 
@@ -208,17 +223,17 @@ Request.acceptSocket = (socket)->
         break
 
     else if msgType is ERROR
-      console.error "IRAC-WS-REMOTE-ERROR".red.inverse, msg.join '\n  '
+      console.error Peer.format(peer), ' WS-REMOTE-ERROR '.red.bold.inverse, msg.join '\n  '
 
-    else console.error 'IRAC-WS-ILLEGAL', msgType, uid, msg
+    else console.error Peer.format(peer), ' WS-ILLEGAL '.red.bold.inverse, msgType, uid, msg
     null
 
   socket.on 'error', (error)->
-    console.log 'IRAC-WS-ERROR', error
+    console.error Peer.format(peer), ' WS-ERROR '.red.bold.inverse, error
     null
 
   socket.on 'close', (error)->
-    console.debug ' IRAC-WS-CLOSE '.blue.bold.inverse, peer.irac
+    console.debug Peer.format(peer), ' WS-CLOSE '.blue.bold.inverse
     delete Request.socket[irac]
     delete Request.connecting[irac]
     delete Request.connected[irac]

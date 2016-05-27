@@ -40,7 +40,7 @@ connect = ->
     else if msgType is ERROR then console.error "IRAC-WS-REMOTE-ERROR", msg.join '\n  '
     else console.error 'IRAC-WS-ILLEGAL', msgType, uid, msg
   s.onopen = (e) -> s.connected = true; do flush
-  s.onerror = (e) -> console.log "NET.sock:error", e; s = null
+  s.onerror = (e) -> console.error "NET.sock:error", e; s = null
 do connect
 
 counter = 0; active = []; queue  = []
@@ -100,6 +100,7 @@ window.Channel = class Channel
     Channel.render()
     null
   @addPeers: (items)-> requestAnimationFrame => items.map (i)=>
+    console.log i
     $('#peer .byIrac'+i.from).remove()
     $('#peer').prepend e = $ @peer i
     do applyDate

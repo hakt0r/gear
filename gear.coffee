@@ -336,7 +336,7 @@ process.cli =
     $app.emit 'daemon:init'
     $app.on 'ready', -> $app.emit 'daemon'
   install: (pkg...)-> $app.on 'ready', ->
-    console.log "INSTALLING GEAR"
+    console.log 'INSTALLING GEAR'
     if pkg.length is 0
       HOME = process.env.HOME
       GEAR = $path.join $path.modules, 'gear.coffee'
@@ -360,12 +360,12 @@ process.cli =
         systemctl --user enable #{f}
         systemctl --user restart gear
       """, ->
-        console.log "__ GEAR WAS SUCCESSFULLY INSTALLED __", arguments
+        console.log '__ GEAR WAS SUCCESSFULLY INSTALLED __', arguments
         process.exit(0)
     else switch ( pkg = pkg.shift() )
-      when "npm" then $require.npm.install.now pkg
-      when "sys" then $require.apt.install.now pkg
-      else console.log "Don't know how to install:", pkg
+      when 'npm' then $require.npm.install.now pkg
+      when 'sys' then $require.apt.install.now pkg
+      else console.log 'Don\'t know how to install:', pkg
 
 $command ssh_update: process.cli.ssh_update = (host)->
   $async.series [
@@ -521,7 +521,7 @@ $require.apt = $function
     return do callback if ( install = ( v for k,v of queue ) ).length is 0
     session = $sudo ['apt-get','install','--no-install-recommends','--no-install-suggests','-y'].concat(install), stdio:'inherit', (p,done)-> do done; p.on 'close', ->
       for app, pkg of queue when not $which app
-        console.log 'ERROR:', app, 'is missing and cannot be installed'
+        console.error 'ERROR:', app, 'is missing and cannot be installed'
         # process.exit(0)
         $require.apt.missing[app] = true
       do callback
@@ -1031,7 +1031,7 @@ $static $sudo: $function
     args = args || []
     args.unshift '-A' if process.env.DISPLAY
     sudo = $cp.spawn 'sudo', args, opts
-    console.log "\x1b[32mSUDO\x1b[0m", args.join ' '
+    console.log '\x1b[32mSUDO\x1b[0m', args.join ' '
     if callback then callback sudo, done
     else sudo.on 'close', -> done
   read: (cmd,callback)-> $sudo ['sh','-c',cmd], (proc,done)->
