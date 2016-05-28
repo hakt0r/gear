@@ -41,7 +41,7 @@ $app.on 'web:listening', ->
   $web.static = require('serve-static')($path.shared)
   $web.wss.on "connection", (socket)->
     unless false is $auth.verify socket, socket._socket, true
-      console.log ' ACCEPT-WSS ', socket.peer
+      console.debug Peer.format(socket.peer), ' ACCEPT-WSS '.green.bold.inverse
       Request.acceptSocket socket
     else
       console.error ' REJECT-WSS '.red.bold.inverse, ' Invalid- or non-IRAC certificate '.red.bold

@@ -1,6 +1,10 @@
 
 if $app? then return $app.on 'web:listening', ->
   $web.bindLibrary '/jquery.js', 'https://ajax.googleapis.com/ajax/libs/jquery/2.2.3/jquery.min.js'
+  $web.bindLibrary '/fontawesome.css', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/css/font-awesome.min.css'
+  $web.bindLibrary '/fonts/fontawesome-webfont.woff2', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/fonts/fontawesome-webfont.woff2'
+  $web.bindLibrary '/fonts/fontawesome-webfont.woff', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/fonts/fontawesome-webfont.woff'
+  $web.bindLibrary '/fonts/fontawesome-webfont.ttf', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/fonts/fontawesome-webfont.ttf'
   $web.bindLibrary '/events.js', 'https://raw.githubusercontent.com/Olical/EventEmitter/master/EventEmitter.min.js'
   $web.bindCoffee  '/client.js', $path.join 'book', 'client.coffee'
   $web.get '/default.css', (req,res)->
@@ -62,7 +66,7 @@ prettyDate = (time) ->
   diff = ((new Date).getTime() - time) / 1000
   day_diff = Math.floor(diff / 86400)
   return htmlentities time if isNaN(day_diff) or day_diff < 0 or day_diff >= 31
-  day_diff == 0 and (diff < 60 and 'just now' or diff < 120 and '1 minute ago' or diff < 3600 and Math.floor(diff / 60) + ' minutes ago' or diff < 7200 and '1 hour ago' or diff < 86400 and Math.floor(diff / 3600) + ' hours ago') or day_diff == 1 and 'Yesterday' or day_diff < 7 and day_diff + ' days ago' or day_diff < 31 and Math.ceil(day_diff / 7) + ' weeks ago'
+  day_diff == 0 and (diff < 60 and 'now' or diff < 120 and '1m' or diff < 3600 and Math.floor(diff / 60) + 'm' or diff < 7200 and '1h' or diff < 86400 and Math.floor(diff / 3600) + 'hrs') or day_diff == 1 and 'yday' or day_diff < 7 and day_diff + 'days' or day_diff < 31 and Math.ceil(day_diff / 7) + 'weeks'
 
 setInterval ( applyDate = -> $('label.date').each (i,e)->
   e.date = $(e).html() unless e.date
@@ -89,26 +93,48 @@ window.Channel = class Channel
       $('#feed').append i = ( Channel[t] || Channel.default )(item,@setting)
     do applyDate
     null
-  @set:(@setting)->
-    $('#send').html if @setting is 'all' then 'Publish Status' else 'Send to #' + @setting
-    $('#send').on 'click', @onSend = =>
+  @prompt:(prompt,callback)->
+    @set @setting, prompt, callback
+  @set:(@setting,prompt,@callback)->
+    $('#send').html if prompt then prompt else if @setting is 'all' then 'Publish Status' else 'Send to #' + @setting
+    @onSend = =>
       unless '' is v = $("#input").val().trim()
-        if v[0] is '/'
-          request cmd = v.substr(1).split /[ \t]+/
+        if ( c = @callback ) then delete @callback; c v; @set @setting
+        else if v[0] is '/'  then request cmd = v.substr(1).split /[ \t]+/
         else request ['say',( if @setting is 'all' then 'status' else @setting ), v]
       $("#input").val('')
     Channel.render()
     null
-  @addPeers: (items)-> requestAnimationFrame => items.map (i)=>
-    console.log i
-    $('#peer .byIrac'+i.from).remove()
-    $('#peer').prepend e = $ @peer i
+  @addPeers: (items)-> requestAnimationFrame =>
+    items.map (i)=>
+      console.log i
+      unless ( c = $ '.message.peer.byIrac' + i.root ).length > 0
+        $('#peer').prepend c = $ @buddy i, i.root
+        c.find('.actions .fa').each (k,e)->
+          e = $ e
+          e.on 'click', Peer.message[e.attr('message-type')].bind null, i.root
+      unless ( e = $ '.message.peer.byIrac' + i.from ).length > 0
+        c.append e = $ @peer i, i.from
+      #$('.peer').each(k,e) remove()
     do applyDate
 
-$(window).on 'keydown', (evt)->
-  if evt.keyCode is 13
-    do evt.preventDefault
-    do Channel.onSend
+Peer = message:
+  chat:(root)-> Channel.prompt "@" + root.substr(0,6), (message)-> request ['say',"@" + root,message]
+  vchat:->
+  ftp:->
+
+$ ->
+  handler = (evt)->
+    console.log evt.keyCode
+    if evt.keyCode is 27 then delete Channel.callback; Channel.set Channel.setting
+    if evt.keyCode is 13
+      do evt.preventDefault
+      do Channel.onSend
+  $('#input').on 'focus', -> $(window).on 'keydown', handler
+  $('#input').on 'blur',  -> $(window).removeListener 'keydown', handler
+  $('#send').on 'click', -> do Channel.onSend
+
+
 
 Channel.default = (item)-> """
   <div class="message binary">
@@ -174,11 +200,26 @@ Channel.audio = (item)-> """
     <p class="body chat">#{htmlentities item.body}</p>
   </div>"""
 
-Channel.peer = (item)-> """
-  <div class="message peer byIrac#{htmlentities item.from}">
+Channel.buddy = (item,id)-> """
+  <div class="message peer byIrac#{htmlentities id}">
+    <span class="actions">
+      <i message-type="chat"  class="fa fa-envelope"></i>
+      <i message-type="vchat" class="fa fa-video-camera"></i>
+      <i message-type="ftp"   class="fa fa-file"></i>
+    </span>
     <span class="meta">
-      <label class="from">#{htmlentities item.from.substr(0,5)}</label>
+      <label class="from">#{htmlentities id.substr(0,5)}</label>
       <label class="date">#{item.date}</label>
+    </span>
+    <ul class="peers">
+    </ul>
+  </div>
+"""
+
+Channel.peer = (item,id)-> """
+  <div class="message peer byIrac#{htmlentities id}">
+    <span class="meta">
+      <label class="from">#{htmlentities id.substr(0,5)}</label>
     </span>
   </div>
 """

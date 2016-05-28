@@ -42,3 +42,13 @@ button{
 
 #feed { width: 66%; }
 #peer { width: 33%; position: fixed; right:0px; top: 90px; }
+.peer .peer .meta .date { display: none; }
+.peer { position: relative; }
+.peer .peer {
+  display: inline-block;
+  clear:both;
+  padding: 0;
+  margin: 0;
+  color:330;
+}
+.actions  { display: inline-block; float:right; }

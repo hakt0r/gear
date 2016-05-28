@@ -28,7 +28,8 @@ Peer.defaultGroups = (peer)->
 
 Peer.subscribe = (peer,list)->
   sub = peer.sub || peer.sub = []; uniq = {}
-  peer.sub = sub = sub.concat(list).filter (i)->
+  peer.sub = sub = sub.concat(list,['@'+peer.root,'@'+peer.irac]).filter (i)->
+    return false if (not i?) or i is 'null'
     return false if uniq[i]; uniq[i] = yes
 
 Peer.opts = (peer) -> {
@@ -66,24 +67,27 @@ Peer.sync = (peer,callback)-> want = offer = null; $async.series [
       unless error
         console.hardcore Peer.format(peer), 'SYNC-REPLY', msg
         Peer.readOpts peer, msg
-        offer = Channel.sync    peer, peer.remoteSync
+        offer = Channel.offer   peer, peer.remoteSync
         want  = Channel.compare peer, msg
-        console.hardcore Peer.format(peer), 'SYNC-WANT', want
+        console.hardcore Peer.format(peer), 'SYNC-WANT', want if Object.keys(want).length > 0
       c error
-  (c)-> Peer.get peer, want, offer, c
+  (c)-> Peer.trade peer, want, offer, c
   -> do callback if callback ]
 
-Peer.get = (peer,want,offer,callback)->
+Peer.trade_filter = (map)->
+  _.omit map, (val,key)-> not ( Array.isArray(val) and val.length > 0 )
+
+Peer.trade = (peer,want,offer,callback)->
   c = 0
-  c += Object.keys(want).length  if want
-  c += Object.keys(offer).length if offer
+  ( want = Peer.trade_filter want; c += Object.keys(want).length )    if want
+  ( offer = Peer.trade_filter offer; c += Object.keys(offer).length ) if offer
   if 0 is c
     do callback if callback
     return false
-  Request peer, ['irac_trade',want,offer], (error,request,result)->
-    console.hardcore Peer.format(peer), 'SYNC-GOT', result
+  Request peer, ['irac_trade',want,offer], (error,result)->
+    console.hardcore Peer.format(peer), 'SYNC-TRADE-RESULT', result
     Channel.push peer, result unless error
-    callback error, request, result if callback
+    callback error, result if callback
   true
 
 Peer.getBlob = (peer,hash)->
@@ -107,13 +111,14 @@ class SyncQueue
     connected = Request.connected
     for irac, peer of connected when irac isnt source.irac or irac is $config.hostid.irac
       q = queue[irac] = queue[irac] || {}
-      q[channel] = ( q[channel] = [] ).concat if peer.direct then items else hashed
+      q[channel] = ( q[channel] = [] ).concat if peer.direct or channel[0] is '@' then items else hashed
     @publish()
   @publish: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
     for irac, channels of SyncQueue.byIRAC
       continue unless peer = PEER[irac]
+      continue unless 0 < ( channels = Peer.trade_filter channels ).length
       console.hardcore Peer.format(peer), 'IRAC-PUSHING', channels
-      Request peer, ['irac_trade',null,channels,Channel.update], ->
+      Peer.trade peer, null, channels, ->
         console.hardcore Peer.format(peer), 'IRAC-PUSHED', channels
       SyncQueue.byIRAC[irac] = {}
     done null
@@ -139,20 +144,20 @@ $static class Channel
       @update = Math.max item.date, @update
       @byHash[item.hash] = item
     Channel.update = Math.max @update, Channel.update || 0
-    # console.log ' NEW CHANNEL '.red, @name, @list.length, @update, Channel.update
+    console.log ' NEW CHANNEL '.red, @name, @list.length, @update, Channel.update
     do $app.sync
-  sync:(date)-> i.hash for i in @list when i.date > date
-  push:(source,items...)->
+  collect:(peer,date)-> i.hash for i in @list when i.date > date
+  push:(peer,items...)->
     out = []
     for item in items when not @byHash[hash = Channel.hash item]
       switch r = $auth.verifyMessage item
         when true
           out.push item
           @list.unshift @byHash[hash] = date:( Channel.update = @update = d = do Date.now ), item:item, hash:hash
-          Peer.getBlob source, item.hash if item.hash
+          Peer.getBlob peer, item.hash if item.hash
         else console.error ' NO-PUSH '.red.bold.inverse, r
     $app.sync 'channel', @name, out
-    SyncQueue.distribute source, @name, out
+    SyncQueue.distribute peer, @name, out
     @updated
   toBSON:=> name:@name, list:@list
 
@@ -161,55 +166,77 @@ Channel.update = 0
 Channel.hash = (item)->
   $md5 JSON.stringify item
 
-Channel.resolve = (name)->
-  Channel.byName[name] || new Channel name:name
+Channel.resolve = (channel,create=true)->
+  exists = Channel.byName[name = channel.name || channel]
+  return false if not ( create or exists? )
+  ( Channel.remove name; return false ) if name.match ' '
+  result = Channel.byName[name] || new ( if name[0] is '@' then PMSGQueue else Channel )(
+    if typeof channel is 'object' then channel else name )
+  # console.hardcore ' CHANNEL-RESOLVE ', name, exists?, create, result::
+  result
+
+Channel.remove = (name)->
+  delete Channel.byName[name]
+  # TODO: hook for $sub channel
 
 Channel.init = ->
   Channel.byName = $config.channels || $config.channels = {}
-  for name, opts of @byName
+  for name, opts of Channel.byName
     opts.name = name
-    new Channel opts
-  # Channel.byName.test.list = [] if Channel.byName.test
+    ctor = if name[0] is '@' then PMSGQueue else Channel
+    console.log ctor, name
+    new ctor opts
+  $config.channels = Channel.byName
+  null
 
-Channel.sync = (peer,date)->
+Channel.offer = (peer,date)->
   response = {}
-  for c in Peer.subscribe(peer) when ch = @byName[c]
-    response[c] = ch.sync(date)
+  for c in Peer.subscribe(peer) when ( ch = Channel.resolve(c,no) )
+    response[c] = ch.collect(peer,date)
     delete response[c] if response[c].length is 0
   response
 
 Channel.compare = (peer,channels)->
-  for name, list of channels when channel = @byName[name]
-    channels[name] = list.filter( (i)-> not channel.byHash[i]? )
+  for name, list of channels when channel = Channel.resolve(name,no)
+    if typeof list[0] isnt 'string'
+      Channel.resolve(name).push channels[name]
+      channels[name] = []
+    else channels[name] = list.filter( (i)-> not channel.byHash[i]? )
     delete channels[name] if channels[name].length is 0
   channels
 
 Channel.push = (source,channels)->
-  for name,list of channels when channel = @byName[name]
+  for name,list of channels when channel = Channel.resolve(name,no)
     channel.push.apply channel, [source].concat list
   null
 
 Channel.get = (peer,channels)->
   channels.opts = Peer.opts peer if channels.opts?
   for name,list of channels
-    if ( channel = @byName[name] )
+    if ( channel = Channel.resolve(name,no) )
       channels[name] = ( item.item for hash in list when item = channel.byHash[hash] )
     else delete channels[name]
   channels
 
+$static class PMSGQueue extends Channel
+  constructor:(opts)-> super opts
+  collect: (peer)-> @list
+
+
 do Channel.init
 
-
-
-
+Channel.resolve('peer')
+Channel.resolve('@'+$config.hostid.root)
+Channel.resolve('@'+$config.hostid.irac)
 
 
 
 $static class LivePeer
-  constructor:(opts)->
+  name: 'peer'
+  constructor:->
     @list = @list || []
     @byHash = {}
-  sync: -> @list.map (i)-> i.irac
+  collect: -> @list.map (i)-> i.irac
   pull: (peer)->
     Array.remove @list, peer
     delete @byHash[peer.irac]
@@ -218,7 +245,6 @@ $static class LivePeer
     SyncQueue.distribute null, 'peer', [item]
 
 Channel.byName.peer = new LivePeer
-
 
 
 
@@ -255,17 +281,20 @@ $command irac_sync: $group '$peer', (msg)->
   return false unless peer = $$.peer
   console.log Peer.format(peer), 'IRAC-SYNC', msg
   Peer.readOpts peer, msg
-  o = Channel.sync peer, peer.remoteSync
+  o = Channel.offer peer, peer.remoteSync
   o.opts = Peer.opts peer
   o
 
 $command irac_trade: $group '$peer', (want,offer,remoteHead)->
   return false unless peer = $$.peer
-  console.log Peer.format(peer), 'IRAC-TRADE', want, offer
-  Peer.get peer, Channel.compare(peer,offer) if offer?
-  peer.remoteHead = remoteHead               if remoteHead?
-  return Channel.get peer, want              if want?
-  null
+  peer.remoteHead = remoteHead if remoteHead?
+  if offer? and Object.keys(offer).length > 0
+    console.debug Peer.format(peer), ' OFFERS '.yellow.bold.inverse, offer
+    Peer.trade peer, Channel.compare(peer,offer)
+  if want? and Object.keys(want).length > 0
+    console.debug Peer.format(peer), ' WANTS '.yellow.bold.inverse, want
+    return Channel.get peer, want
+  true
 
 $command irac_getall: (channel)->
   Channel.resolve(channel,no).list.map (i)->
@@ -330,6 +359,7 @@ $command show: (channel)->
 $command say: (channel,message...)->
   msg = $auth.signMessage type:'text/utf8', body: message.join ' '
   Channel.resolve(channel).push null, msg
+  true
 
 $command subscribe: (channel)->
   Channel.resolve channel
@@ -337,7 +367,7 @@ $command subscribe: (channel)->
   true
 
 $command unsubscribe: (channel)->
-  delete Channel.byName[channel]
+  Channel.remove channel
   do $app.sync
   true
 

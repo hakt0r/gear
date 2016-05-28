@@ -33,15 +33,16 @@ $web.bindCoffee = (path,source)->
     res.send $coffee.compile $fs.readFileSync( $path.join($path.modules,source), 'utf8')
   $web
 
-$web.bindLibrary = (path,source)->
+$web.bindLibrary = (path,source,mime='text/javascript')->
   $web.get path, (req,res)->
-    res.setHeader('Content-Type','text/javascript')
+    res.setHeader('Content-Type',mime)
     res.send cache
-  return if cache = $cache.get source
+  return if ( cache = $cache.get source ) and ( mime = $cache.get 'mime_' + source )
   console.log cache = source + ' downloading...'
   $request.get source, (error,req,body)->
     return console.error "BIND-LIBRARY", source, error if error
     $cache.add source, cache = body
+    $cache.add 'mime_' + source, mime = req.headers['content-type']
   $web
 
 $web.REPLY = (rx,tx)->
