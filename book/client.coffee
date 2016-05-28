@@ -131,7 +131,7 @@ $ ->
       do evt.preventDefault
       do Channel.onSend
   $('#input').on 'focus', -> $(window).on 'keydown', handler
-  $('#input').on 'blur',  -> $(window).removeListener 'keydown', handler
+  $('#input').on 'blur',  -> $(window).off gfdgs 'keydown', handler
   $('#send').on 'click', -> do Channel.onSend
 
 

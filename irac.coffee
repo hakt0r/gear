@@ -105,18 +105,20 @@ Peer.getBlob = (peer,hash)->
 class SyncQueue
   @byIRAC: {}
   @distribute = (source,channel,items)->
+    return unless channel?
+    source = $config.hostid unless source?
     queue  = SyncQueue.byIRAC
-    source = irac: $config.hostid.onion unless source
     hashed = items.map Channel.hash
     connected = Request.connected
     for irac, peer of connected when irac isnt source.irac or irac is $config.hostid.irac
+      console.log arguments
       q = queue[irac] = queue[irac] || {}
       q[channel] = ( q[channel] = [] ).concat if peer.direct or channel[0] is '@' then items else hashed
     @publish()
   @publish: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
     for irac, channels of SyncQueue.byIRAC
       continue unless peer = PEER[irac]
-      continue unless 0 < ( channels = Peer.trade_filter channels ).length
+      continue unless 0 < Object.keys( channels = Peer.trade_filter channels ).length
       console.hardcore Peer.format(peer), 'IRAC-PUSHING', channels
       Peer.trade peer, null, channels, ->
         console.hardcore Peer.format(peer), 'IRAC-PUSHED', channels
