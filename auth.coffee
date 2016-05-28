@@ -95,14 +95,21 @@ $static class Peer
       return peer.update(auth,settings)
     else @update auth, settings
     Peer.byIRAC[@irac] = @
-    Peer.pushCA @root, @
-    console.log ' PEER '.blue.bold.inverse, Peer.format(@), typeof @pem
+    Peer.pushCA @root, @ if @root
+    console.log Peer.format(@), ' PEER '.blue.bold.inverse
+  parseCertificate:(cert=@pem,ca)->
+    Object.assign @, $auth.parseCertificate cert, ca
+    @cachain = ca if ca
+    Peer.pushCA @root, @ if @root
+    do $app.sync
+    console.log Peer.format(@), ' PEER-UPGRADE '.blue.bold.inverse
   update:(auth,settings)->
     Object.assign @, settings, auth; do $app.sync; @
     do @groups
     do $app.sync
-  groups:(group)->
+  groups:(args...)->
     @group = @group || ['$public']
+    @group = @group.concat args
     @group = @group.concat ['$public','$peer','$buddy','$host'] unless -1 is @group.indexOf '$local'
     @group = @group.concat ['$public','$peer','$buddy']         unless -1 is @group.indexOf '$host'
     @group = @group.concat ['$public','$peer']                  unless -1 is @group.indexOf '$buddy'
@@ -159,10 +166,11 @@ new class Auth
     do $require.Module.byName.auth.resolve
 
   parseCertificate: (cert,ca)->
+    return false unless cert
     try
-      if typeof cert is 'string' and ca
-           sa_crt = pki.certificateFromPem cert
-      else sa_crt = pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.raw, 'raw'
+      sa_crt = (
+        if typeof cert is 'string' then pki.certificateFromPem cert
+        else if cert.raw then           pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.raw, 'raw' )
       if cert.issuerCertificate
         ia_crt  = pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.issuerCertificate.raw, 'raw'
         ca_crt  = pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.issuerCertificate.issuerCertificate.raw, 'raw'
@@ -171,13 +179,13 @@ new class Auth
       if ia_crt and ca_crt
         ia_irac = $irac ia_crt.publicKey
         ca_irac = $irac ca_crt.publicKey
-      return cert.parsed =
+      return {
         pem: pki.certificateToPem sa_crt
         pub: pki.publicKeyToPem sa_crt.publicKey
         irac:sa_irac
         ia:ia_irac
         root:ca_irac
-        onion:sa_crt.subject.getField('O').value
+        onion:sa_crt.subject.getField('O').value }
     catch exception then console.error ' PARSE-CERTIFICATE '.red.bold.inverse, cert, exception.stack || exception
     return false
 
@@ -193,13 +201,14 @@ new class Auth
     dir = if inbound then 'inbound' else 'outbound'
     realSocket = socket.outSocket || socket
     if true is ( cert.authorized = realSocket.authorized )
-      if inbound and not PEER[irac] and ( cert.subject.OU is '$local' or cert.subject.OU is '$host' )
+      if inbound and not PEER[irac]
         console.log ' AUTO-PEER '.red.bold.inverse, irac
-        new Peer opts, group:['$host']
+        new Peer opts, group:[cert.subject.OU.toString().replace /\$local/,'$host']
       if peer = PEER[irac]
         target.irac = cert.irac = irac
         socket.getPeerCertificate = -> cert
         console.log Peer.format(peer), " PEER-AUTH(#{dir}) ".green.inverse, peer.group
+      else return false
     else
       console.error " PUBLIC(#{dir}) ".red.inverse, cert.subject.CN, ( socket.outSocket || socket ).authorizationError
       console.error " PUBLIC(#{dir}) ".red.inverse, host, ia, root, cert.subject
@@ -337,20 +346,12 @@ new class Auth
     { shortName: 'O',  value: onion }
     { shortName: 'OU', value: ou } ]
 
-  request:(subject='')->
-    subject += '.' if subject isnt ''
-    csr = pki.createCertificationRequest()
-    csr.signatureOid = pki.oids['rsaEncryption']
-    csr.publicKey = @key.publicKey
-    csr.setSubject @attrs subject
-    csr.sign @key.privateKey, sha256.create()
-    pki.certificationRequestToPem csr
-
-  authorize: (nodeCert,group='$peer')->
+  authorize: (peer, group='$peer')->
     return false if @caDisabled
-    { irac, ia, root, onion, pub } = nodeCert.parsed
+    { irac, ia, root, onion, pub } = peer
+    console.log peer.pub
     cert = pki.createCertificate()
-    cert.publicKey = pub
+    cert.publicKey = pki.publicKeyFromPem pub
     cert.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
     cert.validity.notBefore = new Date
     cert.validity.notAfter  = new Date

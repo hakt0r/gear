@@ -40,8 +40,12 @@ $fs.mkdirSync $path.shared unless $fs.existsSync $path.shared
 $app.on 'web:listening', ->
   $web.static = require('serve-static')($path.shared)
   $web.wss.on "connection", (socket)->
-    $auth.verify socket, socket._socket, true
-    Request.acceptSocket socket
+    unless false is $auth.verify socket, socket._socket, true
+      console.log ' ACCEPT-WSS ', socket.peer
+      Request.acceptSocket socket
+    else
+      console.error ' REJECT-WSS '.red.bold.inverse, ' Invalid- or non-IRAC certificate '.red.bold
+      socket.close()
     null
 
 $static Request: (peer,args,callback) ->
@@ -105,7 +109,8 @@ Request.tlsOpts = (peer,protocol)->
   opts.ca = if peer.cachain then peer.cachain else $config.hostid.cachain
   opts.cert = peer.cert || $config.hostid.cert
   if peer.address
-    opts.url = protocol + '://' + peer.irac + ':2003/rpc/'
+    if peer.irac then opts.url = protocol + '://' + peer.irac    + ':2003/rpc/'
+    else              opts.url = protocol + '://' + peer.address + ':2003/rpc/'
     return opts
   opts.url = protocol + '://' + peer.onion + '.onion:2003/rpc/'
   opts.agent = new Request.Agent opts
@@ -179,8 +184,8 @@ Request.connect = (peer) -> do req = ->
 ERROR = -1; REQUEST = 0; RESPONSE = 1
 
 Request.acceptSocket = (socket)->
-  { peer } = socket; { irac } = peer
-  ( console.error Peer.format(peer), ' REQUEST-NO-PEER '.red.bold.inverse;  return false ) unless peer?
+  { peer } = socket; ( console.error ' REQUEST-NO-PEER '.red.bold.inverse, peer;  return false ) unless peer?
+  { irac } = peer;   ( console.error Peer.format(peer), ' REQUEST-NO-IRAC '.red.bold.inverse;  return false ) unless peer.irac?
   ( console.debug Peer.format(peer), ' WSC-ALREADY-CONNECTED '.red.bold.inverse; return false ) if Request.socket[peer.irac]
   console.hardcore Peer.format(peer), ' WS-ACCEPT '.green.bold.inverse
 

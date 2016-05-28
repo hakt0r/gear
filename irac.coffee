@@ -19,7 +19,9 @@
 
 ###
 
-return unless $require -> @npm 'mime', 'serve-static'
+return unless $require ->
+  @npm 'mime', 'serve-static'
+  @mod 'auth'
 
 Peer.defaultGroups = (peer)->
   peer.group = Array.unique ( peer.group || [] ).concat ['$peer']
@@ -225,21 +227,24 @@ Channel.byName.peer = new LivePeer
 
 
 $command irac_peer: $group '$public', (ca,ack)->
-  { irac, root, host, onion, ia } = peer = new Peer $auth.parseCertificate($$.peer.cert,ca), {}
+  $$.peer.parseCertificate $$.peer.pem, ca
+  { irac, root, onion, ia } = peer = $$.peer
   if ack?
     return yes if peer and peer.remote
-    Object.assign peer, cert:ack, remote:hisCert = $auth.authorize $$.peer.cert
+    Object.assign peer, cert:ack, remote:hisCert = $auth.authorize peer
     console.log Peer.format(peer), ' PEERED-WITH '.blue.bold.inverse, peer
     setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
+    peer.groups '$peer'
     do $app.sync
     return hisCert
   # return no if PEER[irac]?
-  Object.assign cert:no, remote: hisCert = $auth.authorize $$.peer.cert
+  Object.assign cert:no, remote: hisCert = $auth.authorize peer
   Request.static peer, [
     'irac_peer', $config.hostid.cachain, hisCert
   ], (error,req,myCert)->
     return console.error error if error
     console.log Peer.format(peer), ' PEERED-WITH '.green.bold.inverse, peer
+    peer.groups '$peer'
     peer.cert = myCert
     Peer.sync peer, (error)-> # TODO: distrust on error
     do $app.sync
@@ -289,7 +294,9 @@ $command irac_get: $group '$peer', (msg)->
 
 $command peer: Peer.requestAuth = (address)->
   return 'ENOPEER' unless address
-  Request.static { address:address, local:yes }, [ 'irac_peer', $config.hostid.cachain ], (error,req,body)->
+  Request.static address:address, [
+    'irac_peer', $config.hostid.cachain
+  ], (error,req,body)->
     return console.error error if error
   'calling_' + address
 

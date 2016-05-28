@@ -338,30 +338,43 @@ process.cli =
   install: (pkg...)-> $app.on 'ready', ->
     console.log 'INSTALLING GEAR'
     if pkg.length is 0
-      HOME = process.env.HOME
+      UID = ( process.getuid || -> 0 )()
+      { USER, HOME } = process.env
       GEAR = $path.join $path.modules, 'gear.coffee'
-      $fs.mkdirp.sync d = $path.join HOME,'.local','share','systemd','user'
-      $fs.writeFileSync ( f = $path.join d, 'gear.service' ), """
-        [Unit]
-        Description=GEAR Service
-        [Service]
-        Type=simple
-        TimeoutStartSec=0
-        ExecStop=-#{$path.bin + '/gear'} shutdown
-        ExecStartPre=-#{$path.bin + '/gear'} shutdown
-        ExecStart=#{$which 'coffee'} #{GEAR} daemon
-        [Install]
-        WantedBy=multi-user.target
-      """
-      $cp.script """
-        sudo -A loginctl enable-linger #{process.env.USER}
-        systemctl --user | grep -q gear.service &&
-        systemctl --user disable gear
-        systemctl --user enable #{f}
-        systemctl --user restart gear
-      """, ->
-        console.log '__ GEAR WAS SUCCESSFULLY INSTALLED __', arguments
-        process.exit(0)
+      if $which 'systemd'
+        $fs.mkdirp.sync d = $path.join HOME,'.local','share','systemd','user'
+        $fs.writeFileSync ( f = $path.join d, 'gear.service' ), """
+          [Unit]
+          Description=GEAR Service
+          [Service]
+          Type=simple
+          TimeoutStartSec=0
+          ExecStop=-#{$path.bin + '/gear'} shutdown
+          ExecStartPre=-#{$path.bin + '/gear'} shutdown
+          ExecStart=#{$which 'coffee'} #{GEAR} daemon
+          [Install]
+          WantedBy=default.target
+        """
+        $cp.script """
+          sudo -A loginctl enable-linger #{USER}
+          systemctl --user | grep -q gear.service &&
+          systemctl --user disable gear
+          systemctl --user enable #{f}
+          systemctl --user restart gear
+        """, -> console.log '__ GEAR WAS SUCCESSFULLY INSTALLED TO SYSTEMD __'; process.exit(0)
+      else if '/etc/rc.local' then $sudo ['sh','-c',"""
+        [ -n "$EDITOR" && -f "$EDITOR" ] || which nano && EDITOR=nano
+        [ -n "$EDITOR" && -f "$EDITOR" ] || which vim  && EDITOR=vim
+        [ -n "$EDITOR" && -f "$EDITOR" ] || which vi   && EDITOR=vi
+        if cat /etc/rc.local | grep "# gear-#{UID}"
+        then echo "\x1b[32mAlready installed to \x1b[33m/etc/rc.local\x1b[0m"
+        else awk '{if(p)print p;p=$0;}END{
+            print "sudo -u #{USER} nodejs #{HOME}/.config/gear/cache/gear.js daemon >/dev/null 2>&1 & # gear-#{UID}"; print p}
+          ' /etc/rc.local > /etc/rc.local.new
+          $EDITOR /etc/rc.local.new
+          cat /etc/rc.local.new | grep "# gear-#{UID}" || sh
+        fi
+      """]
     else switch ( pkg = pkg.shift() )
       when 'npm' then $require.npm.install.now pkg
       when 'sys' then $require.apt.install.now pkg
@@ -387,18 +400,32 @@ $command ssh_install: process.cli.ssh_install = (host)->
     (c)=> $cp.ssh( host, """
       [ -f .gear_setup.tbz ] || exit 1
       [ "$USER" = "root" ] && sudo= || sudo=sudo
-      which npm && which node && which node-gyp && which ssh-askpass || {
+      i=" "; a=" "
+      which npm  ||                 i="$i npm"
+      which node || which nodejs || i="$i nodejs"
+      which ssh-askpass          || i="$i ssh-askpass"
+      if [ ! "x${i}x" = "x x" ]; then
         $sudo apt-get update
-        $sudo apt-get -y install nodejs node-gyp npm ssh-askpass
-        $sudo ln -sf /usr/bin/nodejs /usr/bin/node; }
-      which coffee || $sudo npm install -g coffee-script
-      cd; rm -rf .gear_setup; mkdir .gear_setup; cd .gear_setup
-      tar xjvf ../.gear_setup.tbz
-      rm -rf   ../.config/gear ../.gear_setup.tbz
-      coffee gear.coffee install
-      cd; rm .config/gear/modules && mv .gear_setup .config/gear/modules
-      echo done
-      read a
+        eval $sudo apt-get -y install $i
+      fi
+      which nodejs && [ ! which node ] && $sudo ln -sf $(which nodejs) /usr/bin/node
+      which node && [ ! which nodejs ] && $sudo ln -sf $(which node) /usr/bin/nodejs
+      which node-gyp || a="$a node-gyp"
+      which coffee   || a="$a coffee-script"
+      if [ ! "x${a}x" = "x x" ]; then
+        $sudo npm -g install $a
+      fi
+      cd;
+        rm -rf .gear_setup;
+        mkdir .gear_setup;
+      cd .gear_setup
+        tar xjvf ../.gear_setup.tbz
+        rm -rf   ../.config/gear ../.gear_setup.tbz
+        coffee gear.coffee install
+      cd
+        rm .config/gear/modules &&
+        mv .gear_setup .config/gear/modules
+      echo done; read a
       """ ).on 'close', => do c ]
   null
 
@@ -770,7 +797,7 @@ Array.last    =   (a) -> a[a.length-1]
 Array.remove  = (a,v) -> a.splice a.indexOf(v), 1
 Array.random  =   (a) -> a[Math.round Math.random()*(a.length-1)]
 Array.commons = (a,b) -> a.filter (i)-> -1 isnt b.indexOf i
-Array.slice   = (a,c) -> Array::slice.call a, c
+Array.slice   = (a,c) -> Array::slice.call a||[], c
 Array.unique  =   (a) -> u={}; a.filter (i)-> return u[i] = on unless u[i]; no
 ### process enhancements ###
 process.cpus = (
@@ -1016,33 +1043,33 @@ $async.accumulator = (token,opts)->
 $async.cue = (worker)->
   cue = []; running = no
   tip = -> unless running
-    task = cue.shift(); running = yes
-    worker task, -> tip running = no
-  push: (task)-> tip cue.push Array.slice.call task
+    return running = no unless task = cue.shift()
+    running = yes; worker task, -> tip running = no
+  (task...)-> tip cue.push task
 
 ### $sudo helper ###
-process.env.SUDO_ASKPASS = w unless process.env.SUDO_ASKPASS and w = $which 'ssh-askpass'
-$static $sudo: $function
-  cue: $async.cue (task,done)->
-    { args,opts,callback } = task
-    unless typeof opts is 'object'
-      callback = opts
-      opts = {}
-    args = args || []
-    args.unshift '-A' if process.env.DISPLAY
-    sudo = $cp.spawn 'sudo', args, opts
-    console.log '\x1b[32mSUDO\x1b[0m', args.join ' '
-    if callback then callback sudo, done
-    else sudo.on 'close', -> done
-  read: (cmd,callback)-> $sudo ['sh','-c',cmd], (proc,done)->
-    $cp.sane proc
-    proc.stdout.once 'data', -> done null
-    $carrier.carry proc.stdout, callback
-  script: (cmd,callback)-> $sudo ['sh','-c',cmd], (sudo,done)->
-    do done; $cp.sane sudo; out = []; err = []
-    $carrier.carry sudo.stdout, out.push.bind out
-    $carrier.carry sudo.stderr, err.push.bind out
-    sudo.on 'close', (status)->
-      callback status, out.join('\n'), err.join('\n')
-  (args,opts,callback)->
-    $sudo.cue.push args:args,opts:opts,callback:callback
+unless process.env.SUDO_ASKPASS
+  process.env.SUDO_ASKPASS = w if w = $which 'ssh-askpass'
+
+$static $sudo: $async.cue (task,done)->
+  [ args, opts, callback ] = task
+  unless typeof opts is 'object'
+    callback = opts
+    opts = {}
+  do done unless ( args = args || [] ).length > 0
+  args.unshift '-A' if process.env.DISPLAY
+  sudo = $cp.spawn 'sudo', args, opts
+  console.log '\x1b[32mSUDO\x1b[0m', args.join ' '
+  if callback then callback sudo, done
+  else sudo.on 'close', done
+
+$sudo.read = (cmd,callback)-> $sudo ['sh','-c',cmd], (proc,done)->
+  $cp.sane proc
+  proc.stdout.once 'data', -> done null
+  $carrier.carry proc.stdout, callback
+
+$sudo.script = (cmd,callback)-> $sudo ['sh','-c',cmd], (sudo,done)->
+  do done; $cp.sane sudo; out = []; err = []
+  $carrier.carry sudo.stdout, out.push.bind out
+  $carrier.carry sudo.stderr, err.push.bind out
+  sudo.on 'close', (status)-> callback status, out.join('\n'), err.join('\n')
