@@ -1,6 +1,7 @@
 
 if $app? then return $app.on 'web:listening', ->
   $web.bindLibrary '/jquery.js', 'https://ajax.googleapis.com/ajax/libs/jquery/2.2.3/jquery.min.js'
+  $web.bindLibrary '/adapter.js', 'http://webrtc.github.io/adapter/adapter-latest.js'
   $web.bindLibrary '/fontawesome.css', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/css/font-awesome.min.css'
   $web.bindLibrary '/fonts/fontawesome-webfont.woff2', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/fonts/fontawesome-webfont.woff2'
   $web.bindLibrary '/fonts/fontawesome-webfont.woff', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/fonts/fontawesome-webfont.woff'
@@ -94,12 +95,11 @@ window.Channel = class Channel
     do applyDate
     null
   @set:(@setting,prompt,@callback)->
-    console.log arguments
     $('#send').html if prompt then prompt else if @setting is 'all' then 'Publish Status' else 'Send to #' + @setting
     @onSend = =>
       unless '' is v = $("#input").val().trim()
-        if ( c = @callback ) then c v
-        else if v[0] is '/'  then request cmd = v.substr(1).split /[ \t]+/
+        if v[0] is '/'  then request cmd = v.substr(1).split /[ \t]+/
+        else if ( c = @callback ) then c v
         else request ['say',( if @setting is 'all' then 'status' else @setting ), v]
       $("#input").val('')
     Channel.render()
@@ -119,7 +119,7 @@ window.Channel = class Channel
 
 Peer = message:
   chat:(root)-> Channel.set "@" + root, "@" + root.substr(0,6), (message)-> request ['say',"@" + root,message]
-  vchat:->
+  vchat:(root)-> new VChat root
   ftp:->
 
 $ ->
@@ -226,6 +226,7 @@ Channel.peer = (item,id)-> """
 request ['list'], (list)->
   $('#feeds').html ''
   ['all'].concat(list).map (stream)->
+    return if stream[0] is '@'
     return unless -1 is ['peer'].indexOf stream
     hstream = htmlentities stream
     $('#feeds').append btn = $ """<button id="show_#{hstream}">#{hstream}</button>"""
@@ -234,3 +235,36 @@ request ['list'], (list)->
   list.map (stream)-> request ['irac_getall',stream], (items)-> Channel.add stream, items
 
 $ -> Channel.set 'all'
+
+class VChat
+  constructor:(@root)->
+    unless video = $('video.chat')[0]
+      $('body').append """
+        <div class="videochat">
+          <video muted class="chat out" />
+          <video muted class="chat in" />
+        </div>"""
+      video = $('video.chat')[0]
+    errorElement = document.querySelector('#errorMsg')
+    constraints = window.constraints = audio:on, video:on
+    errorMsg = (msg, error) ->
+      console.error msg, error
+      return
+    navigator.mediaDevices.getUserMedia(constraints).then((stream) ->
+      videoTracks = stream.getVideoTracks()
+      console.log 'Got stream with constraints:', constraints
+      console.log 'Using video device: ' + videoTracks[0].label
+      stream.onended = ->
+        console.log 'Stream ended'
+        return
+      window.stream = stream
+      video.srcObject = stream
+      video.play()
+      return
+    ).catch (error) ->
+      if error.name == 'ConstraintNotSatisfiedError'
+        errorMsg 'The resolution ' + constraints.video.width.exact + 'x' + constraints.video.width.exact + ' px is not supported by your device.'
+      else if error.name == 'PermissionDeniedError'
+        errorMsg 'Permissions have not been granted to use your camera and ' + 'microphone, you need to allow the page access to your devices in ' + 'order for the demo to work.'
+      errorMsg 'getUserMedia error: ' + error.name, error
+      return

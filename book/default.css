@@ -52,3 +52,11 @@ button{
   color:330;
 }
 .actions  { display: inline-block; float:right; }
+
+.videochat {
+  display: block;
+  position: fixed;
+  right: 5px;
+  top: 5px; }
+
+video.chat { max-width: 200px; }
