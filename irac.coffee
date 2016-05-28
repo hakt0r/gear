@@ -227,10 +227,14 @@ $static class PMSGQueue extends Channel
 
 do Channel.init
 
+Channel.resolve('status')
 Channel.resolve('peer')
 Channel.resolve('@'+$config.hostid.root)
 Channel.resolve('@'+$config.hostid.irac)
-
+Channel.remove()
+Channel.remove(null)
+Channel.remove('null')
+Channel.remove('undefined')
 
 
 $static class LivePeer

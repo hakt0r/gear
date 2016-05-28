@@ -74,7 +74,7 @@ setInterval ( applyDate = -> $('label.date').each (i,e)->
 
 IRAC.on 'irac_trade', (want,offer,date,callback)->
   Channel.add channel, items for channel, items of offer
-  do callback
+  do callback if callback
 
 window.Channel = class Channel
   @byName: all: []
@@ -93,13 +93,12 @@ window.Channel = class Channel
       $('#feed').append i = ( Channel[t] || Channel.default )(item,@setting)
     do applyDate
     null
-  @prompt:(prompt,callback)->
-    @set @setting, prompt, callback
   @set:(@setting,prompt,@callback)->
+    console.log arguments
     $('#send').html if prompt then prompt else if @setting is 'all' then 'Publish Status' else 'Send to #' + @setting
     @onSend = =>
       unless '' is v = $("#input").val().trim()
-        if ( c = @callback ) then delete @callback; c v; @set @setting
+        if ( c = @callback ) then c v
         else if v[0] is '/'  then request cmd = v.substr(1).split /[ \t]+/
         else request ['say',( if @setting is 'all' then 'status' else @setting ), v]
       $("#input").val('')
@@ -107,7 +106,7 @@ window.Channel = class Channel
     null
   @addPeers: (items)-> requestAnimationFrame =>
     items.map (i)=>
-      console.log i
+      return unless i? and i.root? and i.from?
       unless ( c = $ '.message.peer.byIrac' + i.root ).length > 0
         $('#peer').prepend c = $ @buddy i, i.root
         c.find('.actions .fa').each (k,e)->
@@ -119,19 +118,19 @@ window.Channel = class Channel
     do applyDate
 
 Peer = message:
-  chat:(root)-> Channel.prompt "@" + root.substr(0,6), (message)-> request ['say',"@" + root,message]
+  chat:(root)-> Channel.set "@" + root, "@" + root.substr(0,6), (message)-> request ['say',"@" + root,message]
   vchat:->
   ftp:->
 
 $ ->
   handler = (evt)->
     console.log evt.keyCode
-    if evt.keyCode is 27 then delete Channel.callback; Channel.set Channel.setting
+    # if evt.keyCode is 27 then delete Channel.callback; Channel.set Channel.setting
     if evt.keyCode is 13
       do evt.preventDefault
       do Channel.onSend
   $('#input').on 'focus', -> $(window).on 'keydown', handler
-  $('#input').on 'blur',  -> $(window).off gfdgs 'keydown', handler
+  $('#input').on 'blur',  -> $(window).off 'keydown', handler
   $('#send').on 'click', -> do Channel.onSend
 
 
@@ -230,7 +229,7 @@ request ['list'], (list)->
     return unless -1 is ['peer'].indexOf stream
     hstream = htmlentities stream
     $('#feeds').append btn = $ """<button id="show_#{hstream}">#{hstream}</button>"""
-    btn.on 'click', Channel.set.bind Channel, stream
+    btn.on 'click', Channel.set.bind Channel, stream, ( if stream[0] is '@' then 'Send to ' + stream.substr(0,7) ), null
     null
   list.map (stream)-> request ['irac_getall',stream], (items)-> Channel.add stream, items
 
