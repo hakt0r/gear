@@ -111,7 +111,6 @@ class SyncQueue
     hashed = items.map Channel.hash
     connected = Request.connected
     for irac, peer of connected when irac isnt source.irac or irac is $config.hostid.irac
-      console.log arguments
       q = queue[irac] = queue[irac] || {}
       q[channel] = ( q[channel] = [] ).concat if peer.direct or channel[0] is '@' then items else hashed
     @publish()
@@ -247,7 +246,7 @@ $static class LivePeer
     Array.remove @list, peer
     delete @byHash[peer.irac]
   push: (peer)-> unless @byHash[peer.irac]
-    @list.push item: item = @byHash[peer.irac] = root:peer.root, from:peer.irac, date: peer.lastSeen || 0
+    @list.push item: item = @byHash[peer.irac] = caname:peer.caname, name:peer.name, root:peer.root, from:peer.irac, date: peer.lastSeen || 0
     SyncQueue.distribute null, 'peer', [item]
 
 Channel.byName.peer = new LivePeer
@@ -361,6 +360,18 @@ $command show: (channel)->
   Channel.resolve(channel,no).list.map (i)->
     i = i.item
     i.from.substr(0,5) + ": " + i.body
+
+$command set: (id,key,value)->
+  item = Peer.byCA[id.substr(1)]          if id[0] is '@'
+  item = PEER[id.substr(1)]               if id[0] is '@' and not item?
+  item = Channel.resolve(id.substr(1),no) if id[0] is '#'
+  item = Channel.resolve(id,          no) unless item
+  return false unless item
+  for i in ( items = if item.list then item.list else [item] )
+    i[key] = value
+    console.log 'set', id, Peer.format(i), key, value
+  do $app.sync
+  true
 
 $command say: (channel,message...)->
   msg = $auth.signMessage type:'text/utf8', body: message.join ' '

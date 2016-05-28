@@ -207,7 +207,7 @@ Channel.buddy = (item,id)-> """
       <i message-type="ftp"   class="fa fa-file"></i>
     </span>
     <span class="meta">
-      <label class="from">#{htmlentities id.substr(0,5)}</label>
+      <label class="from">#{htmlentities item.caname||id.substr(0,5)}</label>
       <label class="date">#{item.date}</label>
     </span>
     <ul class="peers">
@@ -218,7 +218,7 @@ Channel.buddy = (item,id)-> """
 Channel.peer = (item,id)-> """
   <div class="message peer byIrac#{htmlentities id}">
     <span class="meta">
-      <label class="from">#{htmlentities id.substr(0,5)}</label>
+      <label class="from">#{htmlentities item.name||id.substr(0,5)}</label>
     </span>
   </div>
 """

@@ -122,6 +122,7 @@ Peer.byCA = {}
 
 Peer.format = (peer)->
   o = []
+  o.push peer.name.substr(0,6).green.bold if peer.name
   o.push peer.root.substr(0,6).green.bold if peer.root
   o.push peer.ia.substr(0,2).blue.bold if peer.ia
   o.push peer.irac.substr(0,6).yellow.bold if peer.irac
