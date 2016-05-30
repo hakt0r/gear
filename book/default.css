@@ -52,7 +52,12 @@ button{
   color:330;
 }
 .actions  { display: inline-block; float:right; }
-
+.actions i {
+  border-radius: 2px;
+  background:#FFE69D;
+  padding: 3px; }
+.actions i:hover {
+  padding: 3px; }
 .videochat {
   display: block;
   position: fixed;

@@ -20,7 +20,9 @@
 ###
 
 return unless $require ->
-  @npm 'socksjs git+https://github.com/hakt0r/socksjs', 'mime'
+  @npm 'socksjs git+https://github.com/hakt0r/socksjs', 'mime', 'cbor-sync'
+
+$cbor = require 'cbor-sync'
 
 do -> unless ( dns = require 'dns' )._lookup
   dns._lookup = dns.lookup
@@ -198,17 +200,19 @@ Request.acceptSocket = (socket)->
   _send = socket.send.bind socket
   socket.send = ->
     # console.hardcore 'WS-SEND', arguments
-    _send JSON.stringify arguments[0]
-    # socket.send( $bson.serialize([RESPONSE,uid,message],no,yes,no), binary:on, mask:on )
+    # _send JSON.stringify arguments[0]
+    _send( $cbor.encode(arguments[0],no,yes,no), binary:on, mask:off )
 
   socket.fail = (error,data)->
     console.error Peer.format(peer), error, $util.inspect data
     socket.send [ -1, -1, [ error + "\n" + data ] ]
 
   socket.on "message", (m)->
-    # console.hardcore Peer.format(peer), 'WS-MESSAGE', $util.inspect arguments
-    try m = JSON.parse m
-    catch e then return console.error Peer.format(peer), ' WS-INVALID-JSON '.red.bold.inverse, $util.inspect m
+    # try m = JSON.parse m
+    # catch e then return console.error Peer.format(peer), ' WS-INVALID-JSON '.red.bold.inverse, $util.inspect m
+    try m = $cbor.decode m
+    catch e then return console.error Peer.format(peer), ' WS-INVALID-BSON '.red.bold.inverse, $util.inspect m
+    # console.hardcore Peer.format(peer), 'WS-MESSAGE', $util.inspect m
 
     return socket.fail Peer.format(peer), ' WS-NOT-AN-ARRAY '.red.bold.inverse, m unless Array.isArray m
 

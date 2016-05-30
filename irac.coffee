@@ -92,8 +92,8 @@ Peer.trade = (peer,want,offer,callback)->
 
 Peer.getBlob = (peer,hash)->
   return if $fs.existsSync link = $path.sharedHash hash
-  return if $config.hostid.irac is peer.irac
   console.log ' IRAC-GET-BLOB '.yellow.inverse.bold, hash
+  return if $config.hostid.irac is peer.irac
   Request.pipe peer, ['irac_get',hash], $fs.createWriteStream link
 
 
@@ -145,7 +145,7 @@ $static class Channel
       @update = Math.max item.date, @update
       @byHash[item.hash] = item
     Channel.update = Math.max @update, Channel.update || 0
-    console.log ' NEW CHANNEL '.red, @name, @list.length, @update, Channel.update
+    # console.log ' NEW CHANNEL '.red, @name, @list.length, @update, Channel.update
     do $app.sync
   collect:(peer,date)-> i.hash for i in @list when i.date > date
   push:(peer,items...)->
@@ -172,7 +172,7 @@ Channel.resolve = (channel,create=true)->
   return false if not ( create or exists? )
   ( Channel.remove name; return false ) if name.match ' '
   result = Channel.byName[name] || new ( if name[0] is '@' then PMSGQueue else Channel )(
-    if typeof channel is 'object' then channel else name )
+    if typeof channel is 'object' then channel else name:channel )
   # console.hardcore ' CHANNEL-RESOLVE ', name, exists?, create, result::
   result
 
@@ -185,7 +185,6 @@ Channel.init = ->
   for name, opts of Channel.byName
     opts.name = name
     ctor = if name[0] is '@' then PMSGQueue else Channel
-    console.log ctor, name
     new ctor opts
   $config.channels = Channel.byName
   null
@@ -369,13 +368,13 @@ $command set: (id,key,value)->
   return false unless item
   for i in ( items = if item.list then item.list else [item] )
     i[key] = value
-    console.log 'set', id, Peer.format(i), key, value
   do $app.sync
   true
 
-$command say: (channel,message...)->
+$command say: (to,message...)->
+  return unless c = Channel.resolve to
   msg = $auth.signMessage type:'text/utf8', body: message.join ' '
-  Channel.resolve(channel).push null, msg
+  c.push null, msg
   true
 
 $command subscribe: (channel)->
@@ -392,6 +391,55 @@ $command sync: (irac)->
   peer = PEER[irac] if irac
   Peer.sync peer
   true
+
+
+
+
+
+
+
+$static class IRACStream
+  constructor:(to,opts)->
+    return unless @dest = Channel.resolve to
+    console.log to, @dest
+    @msg = $auth.signMessage Object.assign opts,
+      date:date=Date.now()
+      from:$config.hostid.irac
+      body:'= Media Stream ='
+      hash:@hash=$sha1($config.hostid.root + $config.hostid.irac + date)
+    IRACStream.byHash[@hash] = @
+    @path = $path.sharedHash @hash
+    console.log ' STREAM '.white.bold.inverse, @hash, @path
+  end:(data)->
+    console.log ' STREAM-END '.white.bold.inverse, @hash
+    @save.close()
+  write:(data)->
+    console.log ' STREAM-BEGIN '.white.bold.inverse, @hash
+    @save = $fs.createWriteStream @path
+    @write = @save.write.bind @save
+    @dest.push $config.hostid, @msg
+    @write data
+  @byHash:{}
+
+$command rec: (to,opts)->
+  console.log arguments
+  if s = new IRACStream to, opts then s.hash else false
+
+$command chunk:(hash,id,data)-> if data
+  console.log ' STREAM-CHUNK '.white.bold.inverse, id, data.length
+  return false unless s = IRACStream.byHash[hash]
+  return false unless data
+  s.write data
+
+$command cut:(hash)->
+  return false unless s = IRACStream.byHash[hash]
+  s.end()
+
+
+
+
+
+
 
 $command ssh_empeer: process.cli.ssh_empeer = (host)->
   hostname = $md5 host; peer = null

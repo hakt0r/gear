@@ -1,7 +1,9 @@
 
 if $app? then return $app.on 'web:listening', ->
+  $web.bindLibrary '/cbor.js', 'https://raw.githubusercontent.com/paroga/cbor-js/master/cbor.js'
   $web.bindLibrary '/jquery.js', 'https://ajax.googleapis.com/ajax/libs/jquery/2.2.3/jquery.min.js'
   $web.bindLibrary '/adapter.js', 'http://webrtc.github.io/adapter/adapter-latest.js'
+  $web.bindLibrary '/MediaStreamRecorder.js', 'https://cdn.webrtc-experiment.com/MediaStreamRecorder.js'
   $web.bindLibrary '/fontawesome.css', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/css/font-awesome.min.css'
   $web.bindLibrary '/fonts/fontawesome-webfont.woff2', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/fonts/fontawesome-webfont.woff2'
   $web.bindLibrary '/fonts/fontawesome-webfont.woff', 'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/fonts/fontawesome-webfont.woff'
@@ -18,23 +20,27 @@ if $app? then return $app.on 'web:listening', ->
 Array.remove = (a,v) -> a.splice a.indexOf(v), 1
 
 window.IRAC = new EventEmitter
-
 ERROR = -1; REQUEST = 0; RESPONSE = 1; s = null
 
-connect = ->
+connect = (connected)->
   return if s
   addr = window.location.toString().replace('http','ws').replace(/#.*/,'').replace(/\/$/,'') + '/rpc'
   s = if WebSocket? then new WebSocket addr else new MozWebSocket addr
+  s.binaryType = "arraybuffer"
   s.fail = (error,data)->
     console.error error, data
-    s.send JSON.stringify [ -1, -1, [ error + "\n" + data ] ]
+    # s.send JSON.stringify [ -1, -1, [ error + "\n" + data ] ]
+    s.send CBOR.encode([ -1, -1, [ error + "\n" + data ] ]), binary:on, mask:off
   s.onmessage = (m) =>
-    m = JSON.parse m.data
+    # m = JSON.parse m.data
+    m = CBOR.decode m.data
     return s.fail 'IRAC-WS-NOT-AN-ARRAY', m unless Array.isArray m
     [ msgType, uid, msg ] = m
     return s.fail 'IRAC-WS-INVALID-STRUCTURE', m unless msgType? and uid? and msg? and msg.push?
     if msgType is REQUEST
-      IRAC.emit.apply IRAC, msg.concat (args...)-> try s.send JSON.stringify [RESPONSE,uid,args]
+      IRAC.emit.apply IRAC, msg.concat (args...)->
+        # try s.send JSON.stringify [RESPONSE,uid,args]
+        try s.send CBOR.encode([RESPONSE,uid,args])
     else if ( msgType is RESPONSE )
       for request in active.slice() when request.uid is uid
         if typeof ( callback = request[1] ) is 'function'
@@ -54,7 +60,8 @@ flush = ->
   for req in queue
     req.uid = counter++
     active.push req
-    s.send JSON.stringify [REQUEST,req.uid,req[0]]
+    # s.send JSON.stringify
+    s.send CBOR.encode([REQUEST,req.uid,req[0]])
   queue = []
 
 window.request = (args,callback)->
@@ -119,7 +126,6 @@ window.Channel = class Channel
 
 Peer = message:
   chat:(root)-> Channel.set "@" + root, "@" + root.substr(0,6), (message)-> request ['say',"@" + root,message]
-  vchat:(root)-> new VChat root
   ftp:->
 
 $ ->
@@ -203,7 +209,8 @@ Channel.buddy = (item,id)-> """
   <div class="message peer byIrac#{htmlentities id}">
     <span class="actions">
       <i message-type="chat"  class="fa fa-envelope"></i>
-      <i message-type="vchat" class="fa fa-video-camera"></i>
+      <i message-type="achat" class="fa fa-microphone"></i>
+      <!--i message-type="vchat" class="fa fa-video-camera"></i-->
       <i message-type="ftp"   class="fa fa-file"></i>
     </span>
     <span class="meta">
@@ -236,35 +243,96 @@ request ['list'], (list)->
 
 $ -> Channel.set 'all'
 
+
+Peer.message.achat = (root)-> audio.add root
+
+window.audio = new class AudioChat
+  init:(callback)->
+    constraints = window.constraints = audio:on, video:off
+    navigator.mediaDevices.getUserMedia constraints
+     .then (@stream)=> do callback if callback
+     .catch (e)-> console.error e
+  add: (to)->
+    timer = null
+    return @remove to if @[to] and @[to].stop
+    return @init @add.bind @, to unless @stream
+    request ['rec',to,type:'audio/opus'], (hash) =>
+      if ( e = $('.peer.byIrac'+to) ).length isnt 0
+        e.find('.actions .fa-microphone').css('backgroundColor','red')
+      @[to] = rec = new MediaStreamRecorder @stream
+      rec.mimeType = 'audio/opus'
+      cid = 0 ; rec.ondataavailable = (blob) ->
+        reader = new FileReader
+        reader.readAsArrayBuffer blob
+        reader.onloadend = ->
+          request ['chunk',hash,cid++,new Uint8Array reader.result]
+          clearTimeout timer
+          timer = setTimeout ( -> request ['cut',hash] ), 2000
+        null
+      rec.start 500
+    @[to] = 1
+  remove: (to)->
+    if ( e = $('.peer.byIrac'+to) ).length isnt 0
+      e.find('.actions .fa-microphone').css('backgroundColor','#FFE69D')
+    try @[to].stop()
+    delete @[to]
+
+###
+Peer.message.vchat = (root)-> new VChat "@" + root
+Peer.message.vchat_stop = (root)-> vchat.stop() if vchat
+
+
 class VChat
-  constructor:(@root)->
+  constructor:(@to)->
+    window.vchat = @
+  stop:(hash)->
+    @recorder.stop()
+    @frame.remove()
+    @stopped = true
+  init:(hash)->
     unless video = $('video.chat')[0]
-      $('body').append """
-        <div class="videochat">
+      $('body').append @frame = $ """
+        <div class="message videochat">
+          <span class="meta"><label class="from">#{@to}</label></span>
+          <span class="actions">
+            <i message-type="vchat_stop" class="fa fa-close"></i>
+          </span>
           <video muted class="chat out" />
           <video muted class="chat in" />
         </div>"""
+      @frame.find('.actions .fa').each (k,e)-> $(e).on 'click', Peer.message[$(e).attr('message-type')]
       video = $('video.chat')[0]
     errorElement = document.querySelector('#errorMsg')
     constraints = window.constraints = audio:on, video:on
     errorMsg = (msg, error) ->
       console.error msg, error
       return
-    navigator.mediaDevices.getUserMedia(constraints).then((stream) ->
-      videoTracks = stream.getVideoTracks()
-      console.log 'Got stream with constraints:', constraints
-      console.log 'Using video device: ' + videoTracks[0].label
-      stream.onended = ->
-        console.log 'Stream ended'
-        return
-      window.stream = stream
-      video.srcObject = stream
-      video.play()
-      return
-    ).catch (error) ->
-      if error.name == 'ConstraintNotSatisfiedError'
-        errorMsg 'The resolution ' + constraints.video.width.exact + 'x' + constraints.video.width.exact + ' px is not supported by your device.'
-      else if error.name == 'PermissionDeniedError'
-        errorMsg 'Permissions have not been granted to use your camera and ' + 'microphone, you need to allow the page access to your devices in ' + 'order for the demo to work.'
-      errorMsg 'getUserMedia error: ' + error.name, error
-      return
+    navigator.mediaDevices.getUserMedia(constraints)
+      .then (stream) =>
+        options = mimeType: 'video/webm', audioBitsPerSecond: 128000, videoBitsPerSecond: 128000, bitsPerSecond: 128000, quality: 0.2
+        @recorder = new MediaStreamRecorder(stream)
+        @recorder.mimeType = 'video/webm'
+        cid = 0; # hdr =no
+        @recorder.onstop = ->
+          request ['cut',@hash]
+        @recorder.ondataavailable = (blob) ->
+          reader = new FileReader
+          reader.readAsArrayBuffer blob
+          reader.onloadend = ->
+            # return if reader.result.byteLength < 500 and hdr
+            request ['chunk',hash,cid++,new Uint8Array reader.result]
+            hdr = yes
+          return
+        @recorder.start 3000
+        video.srcObject = stream
+        video.play()
+        null
+      .catch (error) ->
+        if error.name == 'ConstraintNotSatisfiedError'
+          errorMsg 'The resolution ' + constraints.video.width.exact + 'x' + constraints.video.width.exact + ' px is not supported by your device.'
+        else if error.name == 'PermissionDeniedError'
+          errorMsg 'Permissions have not been granted to use your camera and ' + 'microphone, you need to allow the page access to your devices in ' + 'order for the demo to work.'
+        errorMsg 'getUserMedia error: ' + error.name, error
+        null
+    null
+###
