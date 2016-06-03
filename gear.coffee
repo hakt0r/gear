@@ -25,7 +25,7 @@
          IRAC        IRAC      IRAC   IRAC      IRAC   IRAC
     IRAC IRAC IRAC   IRAC      IRAC   IRAC      IRAC      * IRAC ###
 
-_logo = ->
+$logo = (get)->
   _logo = """
                           ░▒▒░  .gear.irac.taskd.fleetlink.wantumeni.lastresort. ░▒░
                       ░░▒▓█▓                                                       ▒▓██▓  ░
@@ -73,8 +73,9 @@ _logo = ->
     [2421,"31",91],[2512,"31",90],[2602,"31",88],[2690,"31",84],[2774,"31",81],[2855,"31",78],[2933,"31",65],
     [2998,"31",63],[3061,"0",0]]; _enemy = ['eastasia ','oceania  ','eurasia  ','assange ','snowden ','adamwhite']
   _logo = _logo.replace /snowden  /, _enemy[Math.round(Math.random()*5)]
-  print = process.stderr.write.bind process.stderr; print '\n\n\n';
-  print ( '\x1b[' + esc + 'm') + _logo.substr(pos,len) for [ pos, esc, len ] in _cmap; print '\n\n\n'
+  o = ( ( '\x1b[' + esc + 'm') + _logo.substr(pos,len) for [ pos, esc, len ] in _cmap ).join ''
+  return o if get
+  print = process.stderr.write.bind process.stderr; print '\n\n\n'; print o; print '\n\n\n'
 
 
 global.$static = (args...) -> while a = do args.shift
@@ -90,6 +91,7 @@ $static
   $cp:   require 'child_process'
   $util: require 'util'
   $path: require 'path'
+  $logo: $logo
 
   $nullfn: ->
 
@@ -310,7 +312,7 @@ $command.byNameAndType = (item,fnc)->
 $command help: (args...) ->
   $$.reply Object.keys $command.byName
 
-$command set: (path,value) ->
+$command cset: (path,value) ->
   key = ( path = path.split('.') ).pop()
   return $$.error "Can't change a root object", path if path.length is 0
   if ( o = Object.resolve path = path.join '.' )
@@ -321,18 +323,18 @@ $command set: (path,value) ->
     $app.syncChange o
     $$.reply set:path+"."+key, value:o[key]
 
-$command list: (path) ->
-    return unless ( o = Object.resolve path )
-    if ( t = typeof o ).match /(string|number|boolean)/
-      $$.reply o
-    else $$.reply Object.keys(o.byName || o.byURL || o.byID || o )
+$command clist: (path) ->
+  return unless ( o = Object.resolve path )
+  if ( t = typeof o ).match /(string|number|boolean)/
+    $$.reply o
+  else $$.reply Object.keys(o.byName || o.byURL || o.byID || o )
 
 $command shutdown: -> process.exit 0
 $command linger:->
 
 process.cli =
   daemon:->
-    do _logo
+    do $logo
     $app.emit 'daemon:init'
     $app.on 'ready', -> $app.emit 'daemon'
   install: (pkg...)-> $app.on 'ready', ->

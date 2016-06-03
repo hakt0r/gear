@@ -1,5 +1,25 @@
 
 if $app? then return $app.on 'web:listening', ->
+
+  $command ui_list:->
+    format_peer = (peer)-> Object.assign {},
+      date: peer.lastSeen
+      root: peer.root
+      irac: peer.irac
+      name: peer.name
+      caname: peer.caname
+      online: Request.connected[irac]?
+    o = $peer:{}, $channel:{}, $hostid: irac:$config.hostid.irac, root:$config.hostid.root
+    for irac, peer of PEER
+      o.$peer[irac]      = p = format_peer peer
+      o.$peer[peer.root] = r = Object.assign {}, p
+      r.irac = r.root
+    for name, channel of Channel.byName
+      if name[0] is '@'
+        o.$peer[name.substr 1].msgout = channel.list.length
+      o.$channel[name] = name:name
+    return o
+
   $web.bindLibrary '/cbor.js', 'https://raw.githubusercontent.com/paroga/cbor-js/master/cbor.js'
   $web.bindLibrary '/jquery.js', 'https://ajax.googleapis.com/ajax/libs/jquery/2.2.3/jquery.min.js'
   $web.bindLibrary '/adapter.js', 'http://webrtc.github.io/adapter/adapter-latest.js'
@@ -17,116 +37,169 @@ if $app? then return $app.on 'web:listening', ->
     res.setHeader('Content-Type','text/html')
     $fs.createReadStream($path.join($path.modules,'book/index.html')).pipe res
 
-Array.remove = (a,v) -> a.splice a.indexOf(v), 1
+do ->
+  Array.remove = (a,v) -> a.splice a.indexOf(v), 1
 
-window.IRAC = new EventEmitter
-ERROR = -1; REQUEST = 0; RESPONSE = 1; s = null
+  window.IRAC = new EventEmitter
+  ERROR = -1; REQUEST = 0; RESPONSE = 1; s = null
 
-connect = (connected)->
-  return if s
-  addr = window.location.toString().replace('http','ws').replace(/#.*/,'').replace(/\/$/,'') + '/rpc'
-  s = if WebSocket? then new WebSocket addr else new MozWebSocket addr
-  s.binaryType = "arraybuffer"
-  s.fail = (error,data)->
-    console.error error, data
-    # s.send JSON.stringify [ -1, -1, [ error + "\n" + data ] ]
-    s.send CBOR.encode([ -1, -1, [ error + "\n" + data ] ]), binary:on, mask:off
-  s.onmessage = (m) =>
-    # m = JSON.parse m.data
-    m = CBOR.decode m.data
-    return s.fail 'IRAC-WS-NOT-AN-ARRAY', m unless Array.isArray m
-    [ msgType, uid, msg ] = m
-    return s.fail 'IRAC-WS-INVALID-STRUCTURE', m unless msgType? and uid? and msg? and msg.push?
-    if msgType is REQUEST
-      IRAC.emit.apply IRAC, msg.concat (args...)->
-        # try s.send JSON.stringify [RESPONSE,uid,args]
-        try s.send CBOR.encode([RESPONSE,uid,args])
-    else if ( msgType is RESPONSE )
-      for request in active.slice() when request.uid is uid
-        if typeof ( callback = request[1] ) is 'function'
-          callback.apply null, msg
-        Array.remove active, request
-        break
-      null
-    else if msgType is ERROR then console.error "IRAC-WS-REMOTE-ERROR", msg.join '\n  '
-    else console.error 'IRAC-WS-ILLEGAL', msgType, uid, msg
-  s.onopen = (e) -> s.connected = true; do flush
-  s.onerror = (e) -> console.error "NET.sock:error", e; s = null
-do connect
+  connect = (connected)->
+    return if s
+    addr = window.location.toString().replace('http','ws').replace(/#.*/,'').replace(/\/$/,'') + '/rpc'
+    s = if WebSocket? then new WebSocket addr else new MozWebSocket addr
+    s.binaryType = "arraybuffer"
+    s.fail = (error,data)->
+      console.error error, data
+      # s.send JSON.stringify [ -1, -1, [ error + "\n" + data ] ]
+      s.send CBOR.encode([ -1, -1, [ error + "\n" + data ] ]), binary:on, mask:off
+    s.onmessage = (m) =>
+      # m = JSON.parse m.data
+      m = CBOR.decode m.data
+      return s.fail 'IRAC-WS-NOT-AN-ARRAY', m unless Array.isArray m
+      [ msgType, uid, msg ] = m
+      return s.fail 'IRAC-WS-INVALID-STRUCTURE', m unless msgType? and uid? and msg? and msg.push?
+      if msgType is REQUEST
+        IRAC.emit.apply IRAC, msg.concat (args...)->
+          # try s.send JSON.stringify [RESPONSE,uid,args]
+          try s.send CBOR.encode([RESPONSE,uid,args])
+      else if ( msgType is RESPONSE )
+        for request in active.slice() when request.uid is uid
+          if typeof ( callback = request[1] ) is 'function'
+            callback.apply null, msg
+          Array.remove active, request
+          break
+        null
+      else if msgType is ERROR then console.error "IRAC-WS-REMOTE-ERROR", msg.join '\n  '
+      else console.error 'IRAC-WS-ILLEGAL', msgType, uid, msg
+    s.onopen = (e) -> s.connected = true; do flush
+    s.onerror = (e) -> console.error "NET.sock:error", e; s = null
+  do connect
 
-counter = 0; active = []; queue  = []
-flush = ->
-  return do connect unless s and s.connected
-  for req in queue
-    req.uid = counter++
-    active.push req
-    # s.send JSON.stringify
-    s.send CBOR.encode([REQUEST,req.uid,req[0]])
-  queue = []
+  counter = 0; active = []; queue  = []
+  flush = ->
+    return do connect unless s and s.connected
+    for req in queue
+      req.uid = counter++
+      active.push req
+      # s.send JSON.stringify
+      s.send CBOR.encode([REQUEST,req.uid,req[0]])
+    queue = []
 
-window.request = (args,callback)->
-  queue.push [args,callback]
-  do flush
-  null
+  window.request = (args,callback)->
+    queue.push [args,callback]
+    do flush
+    null
 
-prettyDate = (time) ->
-  time = parseInt time
-  diff = ((new Date).getTime() - time) / 1000
-  day_diff = Math.floor(diff / 86400)
-  return htmlentities time if isNaN(day_diff) or day_diff < 0 or day_diff >= 31
-  day_diff == 0 and (diff < 60 and 'now' or diff < 120 and '1m' or diff < 3600 and Math.floor(diff / 60) + 'm' or diff < 7200 and '1h' or diff < 86400 and Math.floor(diff / 3600) + 'hrs') or day_diff == 1 and 'yday' or day_diff < 7 and day_diff + 'days' or day_diff < 31 and Math.ceil(day_diff / 7) + 'weeks'
+  window.prettyDate = prettyDate = (time) ->
+    time = parseInt time
+    diff = ((new Date).getTime() - time) / 1000
+    day_diff = Math.floor(diff / 86400)
+    return htmlentities time if isNaN(day_diff) or day_diff < 0 or day_diff >= 31
+    day_diff == 0 and (diff < 60 and 'now' or diff < 120 and '1m' or diff < 3600 and Math.floor(diff / 60) + 'm' or diff < 7200 and '1h' or diff < 86400 and Math.floor(diff / 3600) + 'hrs') or day_diff == 1 and 'yday' or day_diff < 7 and day_diff + 'days' or day_diff < 31 and Math.ceil(day_diff / 7) + 'weeks'
 
-setInterval ( applyDate = -> $('label.date').each (i,e)->
-  e.date = $(e).html() unless e.date
-  $(e).html prettyDate e.date ), 60000
+  setInterval ( window.applyDate = -> $('label.date').each (i,e)->
+    e.date = $(e).html() unless e.date
+    $(e).html prettyDate e.date ), 60000
 
 IRAC.on 'irac_trade', (want,offer,date,callback)->
   Channel.add channel, items for channel, items of offer
   do callback if callback
 
+window.$me = {}
+
 window.Channel = class Channel
-  @byName: all: []
+  @byName: {}
   @setting: 'all'
   @add:(channel,items)->
-    return Channel.addPeers items if channel is 'peer'
+    if channel is '$peer'
+      o = {}; for k,v of items when v.irac
+        o[v.from] = v; v.irac = v.from
+      return IRAC.updateList $peer:o
     items = [items] unless Array.isArray items
     items.forEach (i)-> i.channel = channel
-    @byName.all = @byName.all.concat(items).sort (a,b)-> parseInt(b.date) - parseInt(a.date)
-    @byName[channel] = ( @byName[channel] || [] ).concat(items).sort (a,b)-> parseInt(b.date) - parseInt(a.date)
-    requestAnimationFrame => do @render
-  @render:-> requestAnimationFrame =>
+    channel = new Channel name:channel, list:items
+    do @render
+  @render:-> # requestAnimationFrame =>
     $('#feed').html ''
-    for item in list = @byName[@setting] || @byName[@setting] = []
+    for item in list = ( @byName[@setting] || list:[] ).list
       t = if item.type then item.type.split('/')[0] else 'default'
       $('#feed').append i = ( Channel[t] || Channel.default )(item,@setting)
     do applyDate
     null
-  @set:(@setting,prompt,@callback)->
+  @set:(@setting,@setname,prompt,@callback)->
     $('#send').html if prompt then prompt else if @setting is 'all' then 'Publish Status' else 'Send to #' + @setting
     @onSend = =>
       unless '' is v = $("#input").val().trim()
         if v[0] is '/'  then request cmd = v.substr(1).split /[ \t]+/
         else if ( c = @callback ) then c v
-        else request ['say',( if @setting is 'all' then 'status' else @setting ), v]
+        else request ['say',( if @setting is 'all' then '$status' else @setting ), v]
       $("#input").val('')
     Channel.render()
+    $("#curchannel").html(@setname||@setting)
+    $("#actions").html('').append """
+      <i message-type="chat"  class="fa fa-envelope"></i>
+      <i message-type="achat" class="fa fa-microphone"></i>
+      <!--i message-type="vchat" class="fa fa-video-camera"></i-->
+      <i message-type="ftp"   class="fa fa-file"></i> """
+    $('#actions .fa').each (k,e)->
+      e = $ e; e.on 'click', Peer.message[e.attr('message-type')].bind null, @setting, true
     null
-  @addPeers: (items)-> requestAnimationFrame =>
-    items.map (i)=>
-      return unless i? and i.root? and i.from?
-      unless ( c = $ '.message.peer.byIrac' + i.root ).length > 0
-        $('#peer').prepend c = $ @buddy i, i.root
-        c.find('.actions .fa').each (k,e)->
-          e = $ e
-          e.on 'click', Peer.message[e.attr('message-type')].bind null, i.root
-      unless ( e = $ '.message.peer.byIrac' + i.from ).length > 0
-        c.append e = $ @peer i, i.from
-      #$('.peer').each(k,e) remove()
-    do applyDate
+  @sortNormal: (a,b)-> parseInt(b.date) - parseInt(a.date)
+  constructor:(opts)->
+    return ch.update opts if ch = Channel.byName[opts.name]
+    Channel.byName[opts.name] = @
+    @update opts
+    if $me
+      Channel.$irac = @ if @name is '@' + $me.irac
+      Channel.$root = @ if @name is '@' + $me.root
+  update:(opts)->
+    Object.assign @, opts
+    if @name[0] is '@'
+      opts.list = opts.list || []
+      opts.list = opts.list.concat ( Channel.$irac || {list:[]} ).list.filter ( (i)-> i.from is @name ) unless @name is '@' + $me.irac
+      opts.list = opts.list.concat ( Channel.$root || {list:[]} ).list.filter ( (i)-> i.from is @name ) unless @name is '@' + $me.root
+    @list = ( opts.list || [] ).concat ( @list || [] ).sort Channel.sortNormal
+    Channel.byName.all.list = Channel.byName.all.list.concat(opts.list || []).sort Channel.sortNormal
+    return @ if @name[0] is '$'
+    return @ if @name[0] is '@'
+    unless ( c = $ '.byChannelName_' + @name ).length > 0
+      $('#channel').append c = $ Channel.channel @name
+      c.on 'click', Channel.set.bind Channel, @name, @name
+    return @
 
-Peer = message:
-  chat:(root)-> Channel.set "@" + root, "@" + root.substr(0,6), (message)-> request ['say',"@" + root,message]
-  ftp:->
+window.Peer = class Peer
+  @byCA:{}
+  @bySA:{}
+  @message:
+    chat:(-> do Channel.onSend)
+    ftp:->
+  constructor: (opts)->
+    if sa = Peer.bySA[opts.irac]
+      sa.update opts
+      return sa
+    @update opts
+    Peer.bySA[opts.irac] = @
+    # console.log @
+  update:(opts)->
+    Object.assign @, opts
+    @name   = @name   || @irac.substr(0,6)
+    @caname = @caname || @root.substr(0,6)
+    @channelName = '@' + @root
+    @peerName = '@' + @irac
+    ca = Peer.byCA[opts.root] || Peer.byCA[opts.root] = []
+    ca.push @
+    ca.name = @caname
+    unless ( c = $ '.message.peer.byIrac_' + @root ).length > 0
+      $('#peer').prepend c = $ Channel.buddy @root, @caname, @date
+      $(c.find('.from')[0]).on 'click', Channel.set.bind Channel, @channelName, @caname
+    unless ( e = $ '.message.peer.byIrac_' + @irac ).length > 0
+      c.append e = $ Channel.peer @irac, @name
+      e.on 'click', Channel.set.bind Channel, @peerName, @name
+
+IRAC.updateList = (items)-> requestAnimationFrame =>
+  new Peer    peer    for k,peer    of items.$peer    if items.$peer
+  new Channel channel for k,channel of items.$channel when channel.name[0] isnt '@' if items.$channel
+  do applyDate
 
 $ ->
   handler = (evt)->
@@ -157,11 +230,22 @@ htmlentities = (str) ->
   textarea.innerHTML = str
   textarea.innerHTML
 
-Channel.text = (item)-> """
+Channel.text = (item)->
+  unless name = Peer.byCA[item.from]
+    if sa = Peer.bySA[item.from]
+      name = sa.name + '.' + Peer.byCA[sa.root].name
+    else item.from.substr(0,6)
+  else name = name.name
+  unless to = Peer.byCA[item.channel]
+    if sa = Peer.bySA[item.channel.substr(1)]
+      to = sa.name + '.' + Peer.byCA[sa.root].name
+    else to = item.channel
+  else to = to.name
+  """
   <div class="message chat">
     <span class="meta">
-      <label class="channel">#{htmlentities item.channel}</label>
-      <label class="from">#{htmlentities item.from.substr(0,5)}</label>
+      <label class="channel">#{htmlentities to}</label>
+      <label class="from">#{htmlentities name}</label>
       <label class="date">#{item.date}</label>
     </span>
     <p class="body chat">#{htmlentities item.body}</p>
@@ -205,43 +289,45 @@ Channel.audio = (item)-> """
     <p class="body chat">#{htmlentities item.body}</p>
   </div>"""
 
-Channel.buddy = (item,id)-> """
-  <div class="message peer byIrac#{htmlentities id}">
-    <span class="actions">
-      <i message-type="chat"  class="fa fa-envelope"></i>
-      <i message-type="achat" class="fa fa-microphone"></i>
-      <!--i message-type="vchat" class="fa fa-video-camera"></i-->
-      <i message-type="ftp"   class="fa fa-file"></i>
-    </span>
+Channel.buddy = (id,name,date)-> """
+  <div class="message peer byIrac_#{htmlentities id}">
     <span class="meta">
-      <label class="from">#{htmlentities item.caname||id.substr(0,5)}</label>
-      <label class="date">#{item.date}</label>
+      <label class="from">#{htmlentities name}</label>
+      <label class="date">#{date}</label>
     </span>
     <ul class="peers">
     </ul>
-  </div>
-"""
+  </div>"""
 
-Channel.peer = (item,id)-> """
-  <div class="message peer byIrac#{htmlentities id}">
+Channel.peer = (id,name)-> """
+  <div class="message peer byIrac_#{htmlentities id}">
     <span class="meta">
-      <label class="from">#{htmlentities item.name||id.substr(0,5)}</label>
+      <label class="from">#{htmlentities name}</label>
     </span>
   </div>
 """
 
-request ['list'], (list)->
-  $('#feeds').html ''
-  ['all'].concat(list).map (stream)->
-    return if stream[0] is '@'
-    return unless -1 is ['peer'].indexOf stream
-    hstream = htmlentities stream
-    $('#feeds').append btn = $ """<button id="show_#{hstream}">#{hstream}</button>"""
-    btn.on 'click', Channel.set.bind Channel, stream, ( if stream[0] is '@' then 'Send to ' + stream.substr(0,7) ), null
-    null
-  list.map (stream)-> request ['irac_getall',stream], (items)-> Channel.add stream, items
+Channel.channel = (name)-> """
+  <div class="message channel byChannelName_#{htmlentities name}">
+    <span class="meta">
+      <label class="from">#{htmlentities name}</label>
+    </span>
+  </div>
+"""
 
-$ -> Channel.set 'all'
+request ['ui_list'], (result)->
+  window.$me = result.$hostid; delete result.$hostid
+  console.log $me
+  IRAC.updateList result
+  list = ( v.name for k,v of result.$channel )
+  console.log 'get', list
+  list.map (stream)-> request ['irac_getall',stream], (items)->
+    console.log 'got', stream, items
+    Channel.add stream, items
+
+$ ->
+  new Channel name:'all', list:[]
+  Channel.set 'all', 'Status'
 
 
 Peer.message.achat = (root)-> audio.add root
@@ -257,7 +343,7 @@ window.audio = new class AudioChat
     return @remove to if @[to] and @[to].stop
     return @init @add.bind @, to unless @stream
     request ['rec',to,type:'audio/opus'], (hash) =>
-      if ( e = $('.peer.byIrac'+to) ).length isnt 0
+      if ( e = $('.peer.byIrac_'+to) ).length isnt 0
         e.find('.actions .fa-microphone').css('backgroundColor','red')
       @[to] = rec = new MediaStreamRecorder @stream
       rec.mimeType = 'audio/opus'
@@ -272,7 +358,7 @@ window.audio = new class AudioChat
       rec.start 500
     @[to] = 1
   remove: (to)->
-    if ( e = $('.peer.byIrac'+to) ).length isnt 0
+    if ( e = $('.peer.byIrac_'+to) ).length isnt 0
       e.find('.actions .fa-microphone').css('backgroundColor','#FFE69D')
     try @[to].stop()
     delete @[to]

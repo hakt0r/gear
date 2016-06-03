@@ -3,18 +3,30 @@ button{
   background: #FFE69D;
   font-weight:bold;
   border-radius: 5px; }
-#status {
-  position:relative;
-  padding: 5px; }
-#status #input {
-  background: #FFE69D;
-  padding:5px;
-  display:block;
-  min-width: 100%; }
-#status button {
+#status { position: fixed; left:0; top: 0; right:33%; height:70px; z-index: 1; background-color: #F3B11C; }
+#status > div {
   position: absolute;
-  right:0px;
-  bottom: -12px; }
+  top:5px; left:5px; right:10px; bottom:40px; }
+#status #input {
+  min-width: 100%;
+  min-height: 100%;
+  background: #FFE69D; }
+#status #curchannel {
+  font-size: 0.8em;
+  font-weight: bold;
+  position: absolute;
+  right: 15px;
+  bottom: 7.5px;
+  height: 20px;
+  top: initial;
+  top: initial; }
+
+#status #actions {
+    position: absolute;
+    right: 0px;
+    bottom: 7.5px;
+    height: 20px;
+    top: initial; }
 
 .message {
   border-radius: 5px;
@@ -22,14 +34,15 @@ button{
   background: #F3B11C;
   padding: 5px;
   min-height: 16px; }
-.message label.channel,
-.message label.date,
-.message label.from {
+
+label.channel, label.date, label.from {
   font-size: 80%;
   font-weight:bold;
   float: left;
   margin-right: 10px;
   font-family: sans-serif; }
+label.channel:hover, label.date:hover, label.from:hover { color: #ff0000; }
+
 .message audio,
 .message video,
 .message img { margin: 5px 0; max-width: 100%; min-width: 100%; }
@@ -40,8 +53,8 @@ button{
   font-family: sans-serif;
   padding: 5px;}
 
-#feed { width: 66%; }
-#peer { width: 33%; position: fixed; right:0px; top: 90px; }
+#feed { width: 66%; margin-top: 75px; }
+navigation { width: 33%; position: fixed; right:5px; top: 5px; }
 .peer .peer .meta .date { display: none; }
 .peer { position: relative; }
 .peer .peer {
@@ -52,16 +65,24 @@ button{
   color:330;
 }
 .actions  { display: inline-block; float:right; }
-.actions i {
+#actions i {
   border-radius: 2px;
   background:#FFE69D;
   padding: 3px; }
-.actions i:hover {
+#actions i:hover {
   padding: 3px; }
 .videochat {
   display: block;
   position: fixed;
   right: 5px;
   top: 5px; }
-
+label, .peer i { text-shadow: 0 -1px 1px #775301, 0 1px 1px #FFDC9C; }
 video.chat { max-width: 200px; }
+
+.nosel, #peer * {
+  cursor: arrow;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -o-user-select: none;
+  user-select: none; }

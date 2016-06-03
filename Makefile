@@ -8,6 +8,9 @@ cached:
 release:
 	node ${HOME}/.config/gear/cache/gear.js daemon
 
+release-cui:
+	node ${HOME}/.config/gear/cache/gear.js daemon --cui
+
 install:
 	coffee gear.coffee install 2>&1
 

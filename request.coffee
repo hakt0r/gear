@@ -50,6 +50,28 @@ $app.on 'web:listening', ->
       socket.close()
     null
 
+###
+  PEER-PROBE
+###
+
+Peer.probe = (peer) ->
+  console.debug Peer.format(peer), ' PROBE '.yellow.inverse.bold
+  Peer.sync peer
+  null
+
+Peer.probe.all = ->
+  for k,peer of PEER
+    console.log k
+    if k isnt $config.hostid.irac
+      Peer.probe peer
+  null
+
+$app.on 'daemon', -> do Peer.probe.all
+
+###
+  REQUEST
+###
+
 $static Request: (peer,args,callback) ->
   { irac } = peer
   { queue, active } = Request
@@ -195,7 +217,7 @@ Request.acceptSocket = (socket)->
   Request.socket[irac = peer.irac] = socket
   Request.connected[irac] = peer
   peer.lastSeen = Date.now()
-  Channel.byName.peer.push peer
+  Channel.byName.$peer.push peer
 
   _send = socket.send.bind socket
   socket.send = ->
@@ -227,7 +249,8 @@ Request.acceptSocket = (socket)->
     else if ( msgType is RESPONSE ) and ( queue = Request.active[irac] )?
       for request in queue.slice() when request.uid is uid
         if typeof ( callback = request[2] ) is 'function'
-          callback.apply null, [null,uid].concat msg
+          console.debug Peer.format(peer), ' WS-RESPONSE '.green.bold.inverse, uid, $util.inspect msg
+          callback.apply null, [null].concat msg
         Array.remove queue, request
         break
 
@@ -247,7 +270,7 @@ Request.acceptSocket = (socket)->
     delete Request.connecting[irac]
     delete Request.connected[irac]
     peer.lastSeen = Date.now()
-    Channel.byName.peer.pull peer
+    Channel.byName.$peer.pull peer
     return if irac is $config.hostid.irac
     Request.connect peer
     null
