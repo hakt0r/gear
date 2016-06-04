@@ -48,7 +48,7 @@ $web.bindLibrary = (path,source,mime='text/javascript')->
 $web.REPLY = (rx,tx)->
   (results)-> tx.end JSON.stringify results
 
-$app.on daemon:->
+$app.on 'daemon', ->
   console.log 'WebStart', $config.web
   $web.https = require('https').createServer(
     requestCert: yes

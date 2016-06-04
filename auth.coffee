@@ -182,8 +182,8 @@ new class Auth
         ia_irac = $irac ia_crt.publicKey
         ca_irac = $irac ca_crt.publicKey
       return {
-        pem: pki.certificateToPem sa_crt
-        pub: pki.publicKeyToPem sa_crt.publicKey
+        remote:  pki.certificateToPem sa_crt
+        remotepub: pki.publicKeyToPem sa_crt.publicKey
         irac:sa_irac
         ia:ia_irac
         root:ca_irac
@@ -205,18 +205,16 @@ new class Auth
     if true is ( cert.authorized = realSocket.authorized )
       if inbound and not PEER[irac]
         console.log ' AUTO-PEER '.red.bold.inverse, irac
-        new Peer opts, group:[cert.subject.OU.toString().replace /\$local/,'$host']
-      if peer = PEER[irac]
+        peer = new Peer opts, group:[cert.subject.OU.toString().replace /\$local/,'$host']
+      if peer or peer = PEER[irac]
         target.irac = cert.irac = irac
         socket.getPeerCertificate = -> cert
-        console.log Peer.format(peer), " PEER-AUTH(#{dir}) ".green.inverse, peer.group
-      else return false
-    else
-      console.error " PUBLIC(#{dir}) ".red.inverse, cert.subject.CN, ( socket.outSocket || socket ).authorizationError
-      console.error " PUBLIC(#{dir}) ".red.inverse, host, ia, root, cert.subject
-      peer = new Peer opts, group:['$public']
-    target.peer = socket.peer = peer
-    cert
+        console.log " PEER-AUTH(#{dir}) ".green.inverse, Peer.format(peer)
+        console.debug peer.group.join('/'), Object.keys(peer).join('/')
+        return target.peer = socket.peer = peer
+    console.error " PUBLIC(#{dir}) ".red.inverse, cert.subject.CN, ( socket.outSocket || socket ).authorizationError
+    console.error " PUBLIC(#{dir}) ".red.inverse, host, ia, root, cert.subject
+    target.peer = socket.peer = new Peer opts, group:['$public']
 
   setupFiles:->
     $path.ca = (args...)-> $path.join.apply $path, [$path.configDir,'ca'].concat args

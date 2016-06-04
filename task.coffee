@@ -1,5 +1,5 @@
 
-$static class Task
+$static $evented class Task
   @lastId: 0
   @icon: 'fa-server'
   type: 'task'
@@ -21,14 +21,10 @@ $static class Task
     Task.all[@id] = null
   enable:  ->
   disable: ->
+  start:   (callback=->)-> @_start(=> @emit 'start', callback null); @
+  stop:    (callback=->)-> @_stop( => @emit 'stop' , callback null); @
+  restart: (callback=->)-> @stop(  => @start => @emit 'restart'   ); @
 
-$local Task,
-  start:   (callback=->)-> @_start($$, => @emit 'start', callback null); @
-  stop:    (callback=->)-> @_stop($$,  => @emit 'stop' , callback null); @
-  restart: (callback=->)-> @stop($$,   => @start => @emit 'restart'   ); @
-
-
-$evented Task
 Task.all = {}
 
 $static class SignalBasedTask extends Task

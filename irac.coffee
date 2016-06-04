@@ -172,7 +172,7 @@ $command peer: Peer.requestAuth = (address)->
   'calling_' + address
 
 $command irac_peer: $group '$public', (ca,ack)->
-  $$.peer.parseCertificate $$.peer.pem, ca
+  $$.peer.parseCertificate $$.peer.remote, ca
   { irac, root, onion, ia } = peer = $$.peer
   if ack?
     return yes if peer and peer.remote

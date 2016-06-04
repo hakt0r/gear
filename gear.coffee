@@ -86,29 +86,31 @@ global.$static = (args...) -> while a = do args.shift
   null
 
 $static
+  $app:  new ( EventEmitter = require('events').EventEmitter )
   $os:   require 'os'
   $fs:   require 'fs'
   $cp:   require 'child_process'
   $util: require 'util'
   $path: require 'path'
   $logo: $logo
-
   $nullfn: ->
-
+  $evented: (obj)->
+    Object.assign obj, EventEmitter::; EventEmitter.call obj; obj.setMaxListeners(0); return obj
   $function: (members,func)->
     unless func then func = members else ( func[k] = v for k,v of members )
     func
-
   $which: (name)->
     w = $cp.spawnSync 'which', [name]
     return false if w.status isnt 0
     return w.stdout.toString().trim()
-
   $cue: collect: (init,callback)-> # recursion unroll with callback :D
     cue = if Array.isArray init then init else [init]
     add = cue.push.bind cue; res = []
     res = res.concat callback cue.shift(),add while cue.length > 0
     return res
+
+$app.setMaxListeners 0
+process.on 'exit', $app.emit.bind $app, 'exit'
 
 ### DGB DBG *     DBG DBG DBG   DBG DBG *     DBG     DBG     * DBG DBG
     DGB     DBG   DBG           DBG     DBG   DBG     DBG   DBG
@@ -119,90 +121,17 @@ $static
 $static $debug: $function
   active:no
   hardcore:no
-  enable:(hardcore=no)->
-    $debug.active = yes; $debug.hardcore = hardcore
-    console.log '\x1b[43;30mDEBUG MODE\x1b[0m'
-    console.debug    = console.log
-    console.hardcore = if $debug.hardcore then console.log else ->
-    # cp = require 'child_process'
-    # unless cp._spawn
-    #   cp._spawn = cp.spawn
-    #   cp.spawn = ->
-    #     console.hardcore 'CP-SPAWN', arguments
-    #     cp._spawn.apply cp, arguments
-  disable:->
-    $debug.active = no
-    console.hardcore = console.debug = ->
-  (fn) -> do fn if $debug.active
-
-unless console._log
-  console._log = console.log; start = Date.now()
-  console.log = (args...)->
-    console._log.apply console, ['['+(Date.now()-start)+']'].concat args
-
-unless -2 is (process.argv.indexOf('-D') + process.argv.indexOf('-d'))
-  $debug.enable(-1 isnt process.argv.indexOf('-D'))
+  enable:(debug=no,hardcore=no)->
+    @verbose = yes; @debug = debug || hardcore; @hardcore = hardcore
+    c._log = log = c.log unless log = ( c = console )._log; start = Date.now();
+    c.log = (args...)-> log.apply c, ['['+(Date.now()-start)+']'].concat args
+    c.verbose = log; c.debug = ( if @debug then log else $nullfn ); c.hardcore = ( if @hardcore then log else $nullfn )
+    c.log '\x1b[43;30mDEBUG MODE\x1b[0m', @debug, @hardcore, c.hardcore
+  disable:-> $debug.active = no; c = console; c.log = c._log || c.log; c.hardcore = c.debug = c.verbose = ->
+  (fn) -> do fn if $debug.activ and fn and fn.call
+unless -3 is process.argv.indexOf('-D') + process.argv.indexOf('-d') + process.argv.indexOf('-v')
+  $debug.enable -1 isnt process.argv.indexOf('-d'), -1 isnt process.argv.indexOf('-D')
 else do $debug.disable
-
-### EVT EVT EVT   EVT     EVT   EVT EVT EVT   EVT     EVT   EVT EVT EVT
-    EVT           EVT     EVT   EVT           EVT *   EVT       EVT
-    EVT EVT EVT   EVT     EVT   EVT EVT EVT   EVT EVT EVT       EVT
-    EVT           EVT     EVT   EVT           EVT   * EVT       EVT
-    EVT EVT EVT       EVT       EVT EVT EVT   EVT     EVT       ###
-
-$static $evented: (obj)->
-  obj._event = _event = {}
-  obj._once = _once = {}
-  _fired = {}
-  create = (k)->
-    return list if ( list = _event[k] )?
-    _once[k] = []; _event[k] = []
-  remove = (k,fn)->
-    ( e = create k ).splice e.indexOf(fn), 1
-    _once[k].splice _once[k].indexOf(fn), 1
-    obj
-  emit = (k,fn,args)->
-    fn.apply obj, args
-    remove k,fn if -1 isnt _once[k].indexOf fn
-  obj.once = (k,fn)-> obj.on k,fn; _once[k].push fn; obj
-  obj.off = obj.removeListener = (k,fn)-> remove k,fn; obj
-  obj.on = obj.addListener = (k,fn)->
-    if typeof k is 'object'
-      fn = '' unless fn and typeof fn is 'string'
-      for key, val of k then switch typeof val
-        when 'function' then obj.on fn + key, val
-        when 'object'   then obj.on val, fn + key + ':'
-      return obj
-    ( console.error 'bad event handler', k, fn; return obj ) unless typeof fn is 'function'
-    ( create k ).push fn
-    setImmediate emit.bind null, k, fn, args if ( args = _fired[k] )?
-    obj
-  obj.emit = (k,args...)->
-    if 'object' is ( type = typeof k )
-      args = `args[0] && 'string' === typeof args[0]? args[0] : ''`
-      for key, val of tree then switch typeof val
-        when 'function' then obj.emit args + key, val
-        when 'object'   then obj.emit val, args + key + ':'
-    else if 'string' is type
-      list = create k; _fired[k] = args
-      emit k, fn, args for fn in list when fn
-    return obj
-  return obj
-
-$evented.shim = (fn)->
-  evt = []; emt = [];
-  shim = (fnc)-> -> evt.push [fnc,arguments]
-  fn.emit = (fnc)-> -> emt.push [fnc,arguments]
-  fn.promoteEventedShim = ->
-    $evented fn; delete fn.promoteEventedShim
-    fn[a[0]].apply fn, a[1] for a in evt.concat emt
-    null
-  fn[f] = shim(f) for f in ['on','once','off','removeListener','addListener']
-  fn
-
-$static $app: $evented {}
-
-process.on 'exit', $app.emit.bind $app, 'exit'
 
 ### RPC RPC *     RPC RPC *       * RPC RPC
     RPC     RPC   RPC     RPC   RPC
@@ -210,11 +139,22 @@ process.on 'exit', $app.emit.bind $app, 'exit'
     RPC     RPC   RPC           RPC
     RPC     RPC   RPC             * RPC ###
 
-console.rpc    =  '$local'
-console.group  = ['$local']
-console.defer  = ->->
+$static
+  $$: console
+  $group: (group...,fn)-> fn.group = group.concat( fn.group || [] ); fn
+  $command: $function defaultHandler:{}, byType:{}, byName:{}, byGroup:{}, (obj)-> for k,v of obj
+    v.group = ['$local'].concat v.group || []
+    $rpc k, v
+  $rpc: $function open:{}, (key,fn)->
+    wrapper = eval """( function RPC_#{key}(){
+      args = Array.prototype.slice.call(arguments)
+      $$ = args[0] && args[0].reply && args[0].group ? args.shift() : console
+      return ( #{fn.toString().replace(/\(/,key+' (')} ).apply(this,args) } )"""
+    wrapper[k] = v for k in ['group'] when ( v = fn[k] )
+    console.hardcore '\x1b[32mcommand >>>\x1b[0m', key
+    $command.byName[key] = wrapper
 
-class RPC
+class $rpc.scope
   constructor: (opts) ->
     Object.assign @, opts
     _cmd = @cmd
@@ -224,7 +164,7 @@ class RPC
     else return @error "Command not found: #{_cmd}"
     @args.pop() if ( @args[@args.length-1] || '' ).toString().trim() is ''
     @cmd = @args.shift()
-    @fnc = $command.byName[@cmd][0] if @cmd.match and $command.byName[@cmd]
+    @fnc = $command.byName[@cmd] if @cmd.match
     return @error "Could not find #{_cmd}"                             unless @fnc?
     return @error "Not a function #{_cmd}"                             unless @fnc.apply? or @fnc.push?
     return @error "Access denied: #{_cmd}, no gorup"                   unless @group?
@@ -248,66 +188,15 @@ class RPC
     console.error 'RPC-ERROR'.red.inverse, @cmd, message, object
     @reply error: message, errorData: object
 
-$static # $rpc and consorts / Please refer to the manual regarding $$'s behaiour
-  $$: null
-
-  $public: (o,ks)-> $group '$public','$buddy','$local', $rpc(o,k,v) for k,v of ks
-  $buddy:  (o,ks)-> $group '$buddy','$local',           $rpc(o,k,v) for k,v of ks
-  $local:  (o,ks)-> $group '$local',                    $rpc(o,k,v) for k,v of ks
-  $universal: (types...,fn)-> fn.handler = '*'; fn
-  $default: (types...,fn)-> fn.default = types; fn
-  $handles: (types...,fn)-> fn.handler = types; fn
-  $group: (group...,fn)->
-    fn.group = group.concat fn.group || []
-    fn
-
-  $rpc: $function open:{}, scope: RPC, (obj,key,fn)->
-    if obj::? and obj::type?
-      fn = obj::[key] unless fn
-      type = obj::type
-    else type = 'command'
-    s = fn.toString().replace(/\(/,key+' (')
-    s = """( function RPC_#{key}(){
-      args = Array.prototype.slice.call(arguments)
-      $$ = args[0] && args[0].reply && args[0].group ? args.shift() : console
-      return ( #{s} ).apply(this,args) } )"""
-    wrapper = obj::[key] = eval s
-    wrapper[k] = v for k in ['default','handler','group'] when ( v = fn[k] )
-    $command.byName[key] = [wrapper].concat $command.byName[key] || []
-    wrapper.handler = wrapper.handler || [type]
-    if ( t = wrapper.default )
-      wrapper.handler = wrapper.handler.concat wrapper.default
-      for h in t
-        $command.defaultHandler[h] = wrapper unless $command.defaultHandler[h]
-    for t in wrapper.handler
-      $command.byType[t] = []              unless $command.byType[t]
-      $command.byType[t].byName = {}       unless $command.byType[t].byName?
-      $command.byType[t].push wrapper          if $command.byType[t].indexOf wrapper is -1
-      $command.byType[t].byName[key] = wrapper
-    console.hardcore '\x1b[32mcommand >>>\x1b[0m', key, type
-    $app.once 'index:ready', =>
-      # console.hardcore '\x1b[32m>>> command\x1b[0m', key, type
-      new Command key, wrapper
-    wrapper
+console.rpc    =  '$local'
+console.group  = ['$local']
+console.defer  = ->->
 
 ###   * CMD CMD     * CMD *     CMD     CMD   CMD     CMD     * CMD *     CMD     CMD   CMD CMD *
     CMD           CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD   CMD *   CMD   CMD     CMD
     CMD           CMD     CMD   CMD     CMD   CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD
     CMD           CMD     CMD   CMD     CMD   CMD     CMD   CMD     CMD   CMD   * CMD   CMD     CMD
       * CMD CMD     * CMD *     CMD     CMD   CMD     CMD   CMD     CMD   CMD     CMD   CMD C ###
-
-$static $command: $function
-  defaultHandler:{}, byType:{}, byName:{}, byGroup:{}, (obj)-> for k,v of obj
-    v.group = ['$local'].concat v.group || []
-    $rpc($command,k,v)
-
-$command.byNameAndType = (item,fnc)->
-  return no unless fnc and item and item.type
-  return no unless ( list = $command.byName[fnc] )
-  return no unless ( list = list.filter (h)->
-    h.handler.indexOf(item.type) + h.handler.indexOf('*')  isnt -2
-  ).length > 0
-  return list[0]
 
 $command help: (args...) ->
   $$.reply Object.keys $command.byName
@@ -450,21 +339,6 @@ $static $require: $function
     $fs.touch.sync dest, ref: source
     console.debug '\x1b[32m$compiled\x1b[0m', $require.modName dest
     dest
-  compileThread: (lib,source,compiled)->
-    compiled = $async.debug 'compile-'+lib, compiled
-    cache = $path.join $path.cache, lib.replace(/\//g,'_') + '.js'
-    return compiled null, source unless source.match /\.(coffee|iced)$/
-    return compiled null, cache  if ( $fs.existsSync(cache) and
-      Date.parse($fs.statSync(source ).mtime) is Date.parse($fs.statSync(cache).mtime) )
-    unless ( __ = arguments.callee ).queue
-      __.touch  = require 'touch'
-      __.coffee = require.resolve 'coffee-script/bin/coffee'
-      __.queue  = $async.queue ( (task,callback)-> task callback ), process.cpus
-    __.queue.push (taskFinished)->
-      $cp.spawn(__.coffee,['-bcp',source ]).stdout.pipe($fs.createWriteStream(cache,'utf8') ).on 'close', ->
-        __.touch.sync cache, ref: source
-        compiled     null, cache
-        taskFinished null
   scan: (base) -> $cue.collect base,(dir,cue)->
     $fs.readdirSync(dir).map( (i)-> $path.join dir, i ).filter (i) ->
       return false if i is __filename or i.match 'node_modules'
@@ -910,11 +784,6 @@ $async.deadline = (deadline,worker)->
     cue = []
   return trigger = ->
     cue.push arguments
-    # ( Error.prepareStackTrace = (err, stack) -> stack )
-    # ( try err = new Error )
-    # ( [ cls,line,file ] = do -> while err.stack.length then return [r.getFunctionName()||'$@',r.getLineNumber(),f] if __filename isnt f = ( r = err.stack.shift() ).getFileName() )
-    # ( delete Error.prepareStackTrace )
-    # sources[file] = [ line, cls ]
     return if running
     timer && clearTimeout timer
     timer = setTimeout guard, deadline
@@ -995,52 +864,6 @@ $async.limit = (token,timeout,callback)->
     timeout  = 0
   clearTimeout t if ( t = $limit[token] )
   $limit[token] = setTimeout callback, 0
-
-$async.accumulator = (token,opts)->
-  fnc = (name,callback)->
-    if fnc.running
-      # console.log token, 'postpone', name
-      fnc.more = [] unless fnc.more
-      fnc.more.push name, callback
-    else if name
-      fnc.queue = [] unless fnc.queue
-      fnc.wait  = [] unless fnc.wait
-      if not Array.isArray name then fnc.queue.push name
-      else fnc.queue = fnc.queue.concat name
-      fnc.wait.push callback
-      clearTimeout fnc.timer if fnc.timer
-      fnc.timer = setTimeout fnc, 300
-      # console.log token, 'queue', name, fnc.running
-    else if fnc.queue.length > 0
-      fnc.running = yes
-      queue = fnc.queue
-      console.splash token + ' running [' + queue.join(', ') + ']'
-      console.log    token + ' running [' + queue.join(', ') + ']'
-      inst = fnc.run queue
-      _log = (stream)=>
-        buf = ''
-        stream.on 'data', (data)=>
-          buf = buf + data.toString()
-          if -1 < buf.indexOf '\n'
-            lns = buf.split('\n')
-            unless ( lst = lns.pop() ) is ''
-              buf = lst
-            for line in lns when line.trim() isnt ''
-              console.log token, line
-      _log inst.stdout
-      _log inst.stderr
-      wait = fnc.wait
-      fnc.timer = fnc.wait = fnc.queue = null
-      inst.on 'close', =>
-        c null for c in wait; null
-        fnc.running = no
-        if fnc.more
-          fnc.apply null, fnc.more
-          fnc.more = null
-  Object.assign fnc, opts
-  global[token] = fnc
-  do fnc.init if fnc.init
-  fnc
 
 $async.cue = (worker)->
   cue = []; running = no
