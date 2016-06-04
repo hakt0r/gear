@@ -380,7 +380,9 @@ new class Auth
     if message.from is $config.hostid.irac
       key = @key.publicKey
     unless key
-      return 'ENOPEER' unless ( peer = PEER[message.from] ) and ( cert = peer.remote )
+      unless ( peer = PEER[message.from] ) and ( cert = peer.remote )
+        console.log 'ENOPEER', Object.keys peer
+        return 'ENOPEER'
       console.log 'PEER-EXISTS', message, peer
       key = pki.certificateFromPem(cert).publicKey
     return 'ENOKEY' unless key

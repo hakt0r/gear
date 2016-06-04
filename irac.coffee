@@ -67,7 +67,7 @@ $static class Channel
           out.push item
           @list.unshift @byHash[hash] = date:( Channel.update = @update = d = do Date.now ), item:item, hash:hash
           Peer.getBlob peer, item.hash if item.hash
-        else console.error ' NO-PUSH '.red.bold.inverse, item
+        else console.error ' NO-PUSH '.red.bold.inverse, r, item
     $app.sync 'channel', @name, out
     SyncQueue.distribute peer, @name, out
     @updated
@@ -117,7 +117,7 @@ Channel.push = (source,channels)->
 
 $static class PMSGQueue extends Channel
   constructor:(opts)-> super opts
-  collect: (peer)-> @list
+  collect: (peer)-> @list.map (i)-> i.item
 
 $static class LivePeer
   name: '$peer'
@@ -125,10 +125,20 @@ $static class LivePeer
     @list = @list || []
     @byHash = {}
     @byIRAC = {}
-  collect: (peer)-> @list.filter( (i)-> i.irac isnt peer.irac ).map( (i)-> i.hash )
+  collect: (peer)->
+    @list.filter( (i)->
+      ( i.item.irac isnt peer.irac ) and ( i.item.irac isnt $config.hostid.irac )
+    ).map( (i)-> i.hash )
   pull: (peer)->
     Array.remove @list, peer
     delete @byHash[peer.irac]
+  get:(peer,list)->
+    unless -1 is peer.group.indexOf '$host'
+      o = ( for i in list when -1 isnt idx = @list.indexOf i
+        p = PEER[@list[idx].item.irac]
+        { caname:p.caname name:p.name, onion:p.onion, address:p.address, irac:p.irac, root:p.root }
+      )
+    else return ( @list[idx].item for i in list when ( -1 isnt idx = @list.indexOf i ) )
   push: (peer,items...)->
     for p,q in items
       unless PEER[p.irac]?
@@ -286,7 +296,9 @@ Channel.get = (peer,channels)->
   channels.opts = Peer.opts peer if channels.opts?
   for name,list of channels
     if ( channel = Channel.resolve(name,no) )
-      channels[name] = ( item.item || item for hash in list when item = channel.byHash[hash] )
+      if channel.get
+        channels[name] = channel.get peer, list
+      else channels[name] = ( item.item || item for hash in list when item = channel.byHash[hash] )
       delete channels[name] if channels[name].length is 0
     else delete channels[name]
   return channels
@@ -455,6 +467,7 @@ $command ssh_empeer: process.cli.ssh_empeer = (host)->
       cd; coffee .config/gear/modules/gear.coffee install
     """ ); setTimeout (-> do c), 3000
     (c)=>
+      cert = peer.cert
       delete peer.cert; delete peer.key; delete peer.pem
-      Peer.sync new Peer peer, name:host, group:['$host'], address:host
+      Peer.sync new Peer peer, name:host, group:['$host'], address:host, remote:cert
       null ]
