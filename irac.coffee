@@ -67,7 +67,7 @@ $static class Channel
           out.push item
           @list.unshift @byHash[hash] = date:( Channel.update = @update = d = do Date.now ), item:item, hash:hash
           Peer.getBlob peer, item.hash if item.hash
-        else console.error ' NO-PUSH '.red.bold.inverse, r
+        else console.error ' NO-PUSH '.red.bold.inverse, item
     $app.sync 'channel', @name, out
     SyncQueue.distribute peer, @name, out
     @updated
@@ -131,15 +131,15 @@ $static class LivePeer
     delete @byHash[peer.irac]
   push: (peer,items...)->
     for p,q in items
-      if not PEER[peer.irac]
+      unless PEER[p.irac]?
         items[q] = p = new Peer p
-        Request.static peer, ['irac_peer',$config.hostid.cachain], $nullfn
+        Request.static p, ['irac_peer',$config.hostid.cachain], $nullfn
         console.log ' DISCOVER '.green.bold.inverse, Peer.format p
       else console.log ' EXISTS '.red.bold.inverse, Peer.format p
     unless item = @byIRAC[peer.irac]
-      pubRec = name:peer.name, onion:peer.onion, root:peer.root, irac:peer.irac, date: peer.lastSeen || 0
+      pubRec = name:peer.name, address:peer.address, onion:peer.onion, root:peer.root, irac:peer.irac
       hash = Channel.hash pubRec
-      @list.push hash:hash, item: item = @byHash[hash] = @byHash[peer.irac] = pubRec
+      @list.push hash:hash, date: peer.lastSeen || 0, item: item = @byHash[hash] = @byHash[peer.irac] = pubRec
     else item.date = Date.now()
     SyncQueue.distribute peer, '$peer', [item]
 
@@ -154,7 +154,7 @@ do Channel.init
 ###
 
 $command peer: Peer.requestAuth = (address)->
-  return 'ENOPEER' unless address
+  return 'ENOADDRESS' unless address
   Request.static address:address, [
     'irac_peer', $config.hostid.cachain
   ], (error,req,body)->
@@ -269,7 +269,7 @@ Peer.trade = (peer,want,offer,callback)->
     do callback if callback
     return false
   Request peer, ['irac_trade',want,offer], (error,result)->
-    console.hardcore Peer.format(peer), 'SYNC-TRADE-RESULT', result
+    # console.hardcore Peer.format(peer), 'SYNC-TRADE-RESULT', result
     Channel.push peer, result unless error
     callback error, result if callback
   true

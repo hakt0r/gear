@@ -113,7 +113,7 @@ window.Channel = class Channel
   @add:(channel,items)->
     if channel is '$peer'
       o = {}; for k,v of items when v.irac
-        o[v.from] = v; v.irac = v.from
+        o[v.irac] = v; v.irac
       return IRAC.updateList $peer:o
     items = [items] unless Array.isArray items
     items.forEach (i)-> i.channel = channel

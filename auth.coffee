@@ -91,6 +91,7 @@ $config.peers = $config.peers || {}
 $static class Peer
   constructor:(auth,settings)->
     return false if false is auth
+    return false unless auth.irac
     if (peer = PEER[auth.irac])? and peer.update
       return peer.update(auth,settings)
     else @update auth, settings
