@@ -212,7 +212,7 @@ $command cset: (path,value) ->
     $app.syncChange o
     $$.reply set:path+"."+key, value:o[key]
 
-$command clist: (path) ->
+$command clist: (path='') ->
   return unless ( o = Object.resolve path )
   if ( t = typeof o ).match /(string|number|boolean)/
     $$.reply o
@@ -222,6 +222,23 @@ $command shutdown: -> process.exit 0
 $command linger:->
 
 process.cli =
+  show:(path)->
+    process.exit 1 unless t = Object.resolve $config, path
+    console.log JSON.stringify t; process.exit 0
+  list:(path='')->
+    process.exit 1 unless t = Object.resolve $config, path
+    console.log JSON.stringify Object.keys t; process.exit 0
+  set:(path,key,value)->
+    if value is undefined then o = $config; value = key; key = path
+    else process.exit 1 unless t = Object.resolve $config, path
+    console.log JSON.stringify o[key] = value; $app.sync();
+  unset:(path,key)->
+    if key is undefined then o = $config; key = path
+    else process.exit 1 unless t = Object.resolve $config, path
+    delete o[key]; $app.sync();
+  restart:-> if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
+  start:-> if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
+  stop:-> if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','stop','gear']
   daemon:->
     do $logo
     $app.emit 'daemon:init'
@@ -533,7 +550,7 @@ $app.init.corelib = ->
 $app.init.corelib.resolveCache = ->
   Module = require 'module'
   return if Module.__resolveFilename
-  console.log 'resolveCache'
+  console.debug 'resolveCache'
   nodeModule = {}; timer = null
   try cache = JSON.parse $fs.readFileSync( fpath = $path.join $path.cache, 'resolve.json' ) catch e then cache = {}
   Object.keys(process.binding('natives')).forEach (n) -> nodeModule[n] = yes
@@ -682,13 +699,10 @@ process.cpus = (
 
 ### Object enhancements ###
 Object.resolve = (o,path)->
-  ( path = o; o = global ) unless path
-  path = ''                unless path
-  path = path.replace /^@/, '$'
+  ( path = o; o = global ) unless path?
+  return o if not path or path is ''
   l = path.split '.'
-  while l.length > 0
-    unless ( o = o[l.shift()] )
-      return false
+  return false unless ( o = o[l.shift()] ) while l.length > 0
   return o
 
 Object.unroll = (obj, handle)->

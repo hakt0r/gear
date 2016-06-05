@@ -83,4 +83,5 @@ $app.on 'web:listening', -> $web.post '/rpc', (rx,tx,nx)->
   # console.hardcore 'POST-RPC', typeof rx.body, $util.inspect rx.body
   peer = rx.peer
   new $rpc.scope web:{req:rx,res:tx,next:nx}, group:peer.group, peer:peer, cmd:rx.body, reply:$web.REPLY rx,tx
-  $app.emit 'web:start'
+
+$app.emit 'web:start'
