@@ -19,19 +19,6 @@
 
   # SSL/TLS and Certificate - Management
 
-  [ Recommended soundtrack for patching: ]
-
-       Flux Pavilion - I Can't Stop
-      Camo & Krooked - Nothing is older than yesterday
-              John B - Numbers (Camo & Krooked Remix)
-              Netsky - We Can Only Live Today (Puppy) (Feat Billie) - Camo & Krooked Remix
-           B-Complex - Beautiful Lies VIP
-         Freestylers - Cracks (Ft. Belle Humble) (Flux Pavilion Remix)
-      Maduk ft Veela - Ghost Assassin
-                SAIL - AWOLNATION
-               Adele - Hometown Glory (High Contrast Remix)
-        The Agitator - Say No (Cutline Remix)
-
 ###
 
 return unless $require ->
@@ -105,7 +92,7 @@ $static class Peer
     do $app.sync
     console.log Peer.format(@), ' PEER-UPGRADE '.blue.bold.inverse
   update:(auth,settings)->
-    Object.assign @, settings, auth; do $app.sync; @
+    Object.assign @, settings, auth
     do @groups
     do $app.sync
   groups:(args...)->
