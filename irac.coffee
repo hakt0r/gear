@@ -99,7 +99,7 @@ Channel.init = ->
     new ctor opts
   $config.channels = Channel.byName
   Channel.resolve('$status')
-  Channel.resolve('@'+$config.hostid.root)
+  Channel.resolve('@'+$config.hostid.ra)
   Channel.resolve('@'+$config.hostid.irac)
   Channel.remove()
   Channel.remove(null)
@@ -136,18 +136,12 @@ $static class LivePeer
     unless -1 is peer.group.indexOf '$host'
       o = ( for i in list when -1 isnt idx = @list.indexOf i
         p = PEER[@list[idx].item.irac]
-        { caname:p.caname name:p.name, onion:p.onion, address:p.address, irac:p.irac, root:p.root }
-      )
+        { caname:p.caname name:p.name, onion:p.onion, address:p.address, irac:p.irac, ra:p.ra } )
     else return ( @list[idx].item for i in list when ( -1 isnt idx = @list.indexOf i ) )
   push: (peer,items...)->
-    for p,q in items
-      unless PEER[p.irac]?
-        items[q] = p = new Peer p
-        Request.static p, ['irac_peer',$config.hostid.cachain], $nullfn
-        console.log ' DISCOVER '.green.bold.inverse, Peer.format p
-      else console.log ' EXISTS '.red.bold.inverse, Peer.format p
+    items[q] = p = new Peer.Shadow p for p,q in items
     unless item = @byIRAC[peer.irac]
-      pubRec = name:peer.name, address:peer.address, onion:peer.onion, root:peer.root, irac:peer.irac
+      pubRec = name:peer.name, address:peer.address, onion:peer.onion, ra:peer.ra, irac:peer.irac
       hash = Channel.hash pubRec
       @list.push hash:hash, date: peer.lastSeen || 0, item: item = @byHash[hash] = @byHash[peer.irac] = pubRec
     else item.date = Date.now()
@@ -165,34 +159,28 @@ do Channel.init
 
 $command peer: Peer.requestAuth = (address)->
   return 'ENOADDRESS' unless address
-  Request.static address:address, [
-    'irac_peer', $config.hostid.cachain
+  Request.static name:address.split('.').shift(),address:address, [
+    'irac_peer'
   ], (error,req,body)->
     return console.error error if error
   'calling_' + address
 
-$command irac_peer: $group '$public', (ca,ack)->
-  $$.peer.parseCertificate $$.peer.remote, ca
+$command irac_peer: $group '$public', (ack)->
   { irac, root, onion, ia } = peer = $$.peer
-  if ack?
-    return yes if peer and peer.remote
-    Object.assign peer, cert:ack, remote:hisCert = $auth.authorize peer
-    console.log Peer.format(peer), ' PEERED-WITH '.blue.bold.inverse, peer
+  accept = (peer,ack)->
+    peer.log ' PEERED-WITH '.green.bold.inverse
     setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
     peer.groups '$peer'
+    peer.cert = ack
     do $app.sync
+  if ack?
+    Object.assign peer, remote:hisCert = $auth.authorize peer
+    accept peer, ack
     return hisCert
-  # return no if PEER[irac]?
-  Object.assign cert:no, remote: hisCert = $auth.authorize peer
-  Request.static peer, [
-    'irac_peer', $config.hostid.cachain, hisCert
-  ], (error,req,myCert)->
+  Object.assign peer, cert:no, remote: hisCert = $auth.authorize peer
+  Request.static peer, [ 'irac_peer', hisCert ], (error,req,myCert)->
     return console.error error if error
-    console.log Peer.format(peer), ' PEERED-WITH '.green.bold.inverse, peer
-    peer.groups '$peer'
-    peer.cert = myCert
-    Peer.sync peer, (error)-> # TODO: distrust on error
-    do $app.sync
+    accept peer, myCert
     null
   'calling_back'
 
@@ -207,7 +195,7 @@ $command sync: (irac)->
 
 $command irac_sync: $group '$peer', (msg)->
   return false unless peer = $$.peer
-  console.log Peer.format(peer), 'IRAC-SYNC', msg
+  peer.log ' IRAC-SYNC '.yellow.bold.inverse, msg
   Peer.readOpts peer, msg
   o = Channel.offer peer, peer.remoteSync
   o.opts = Peer.opts peer
@@ -215,16 +203,16 @@ $command irac_sync: $group '$peer', (msg)->
 
 Peer.sync = (peer,callback)-> want = offer = null; $async.series [
   (c)->
-    console.log Peer.format(peer), 'IRAC-SYNCING-WITH', peer.remoteHead
+    peer.log ' IRAC-SYNCING-WITH '.blue.bold.inverse, peer.remoteHead
     Request peer, [
       'irac_sync', opts: Peer.opts peer
     ], (error,msg)->
       unless error
-        console.hardcore Peer.format(peer), 'SYNC-REPLY', msg
+        peer.hardcore  'SYNC-REPLY', msg
         Peer.readOpts peer, msg
         offer = Channel.offer   peer, peer.remoteSync
         want  = Channel.compare peer, msg
-        console.hardcore Peer.format(peer), 'SYNC-WANT', want if Object.keys(want).length > 0
+        peer.hardcore  'SYNC-WANT', want if Object.keys(want).length > 0
       c error
   (c)-> Peer.trade peer, want, offer, c
   -> do callback if callback ]
@@ -261,9 +249,9 @@ class SyncQueue
     for irac, channels of SyncQueue.byIRAC
       continue unless peer = PEER[irac]
       continue unless 0 < Object.keys( channels = Peer.trade_filter channels ).length
-      console.hardcore Peer.format(peer), 'IRAC-PUSHING', channels
+      peer.hardcore  'IRAC-PUSHING', channels
       Peer.trade peer, null, channels, ->
-        console.hardcore Peer.format(peer), 'IRAC-PUSHED', channels
+        peer.hardcore  'IRAC-PUSHED', channels
       SyncQueue.byIRAC[irac] = {}
     done null
 
@@ -279,7 +267,7 @@ Peer.trade = (peer,want,offer,callback)->
     do callback if callback
     return false
   Request peer, ['irac_trade',want,offer], (error,result)->
-    # console.hardcore Peer.format(peer), 'SYNC-TRADE-RESULT', result
+    # peer.hardcore  'SYNC-TRADE-RESULT', result
     Channel.push peer, result unless error
     callback error, result if callback
   true
@@ -307,13 +295,13 @@ $command irac_trade: $group '$peer', (want,offer,remoteHead)->
   return false unless peer = $$.peer
   peer.remoteHead = remoteHead if remoteHead?
   if offer? and Object.keys(offer).length > 0
-    console.debug Peer.format(peer), ' OFFERS '.yellow.bold.inverse, offer
-    console.debug Peer.format(peer), ' WEWANT '.yellow.bold.inverse, Channel.compare(peer,offer)
+    peer.debug  ' OFFERS '.yellow.bold.inverse, offer
+    peer.debug  ' WEWANT '.yellow.bold.inverse, Channel.compare(peer,offer)
     Peer.trade peer, Channel.compare(peer,offer)
   if want? and Object.keys(want).length > 0
     deliver = Channel.get peer, want
-    console.debug Peer.format(peer), ' WANTS '.yellow.bold.inverse, want
-    console.debug Peer.format(peer), ' GETS '.yellow.bold.inverse, deliver
+    peer.debug  ' WANTS '.yellow.bold.inverse, want
+    peer.debug  ' GETS '.yellow.bold.inverse, deliver
     return deliver
   return true
 
@@ -351,9 +339,10 @@ $command unsubscribe: (channel)->
   do $app.sync
   true
 
-Peer.subscribe = (peer,list)->
-  sub = peer.sub || peer.sub = []; uniq = {}
-  peer.sub = sub = sub.concat(list,['@'+peer.root,'@'+peer.irac]).filter (i)->
+Peer.subscribe = (peer,list=[])->
+  uniq = {}; peer.sub = ( peer.sub || [] ).concat( list, [
+    '$peer', '$subscribe', '$status', '@' + peer.ra, '@' + peer.irac
+  ]).filter (i)->
     return false if (not i?) or i is 'null'
     return false if uniq[i]; uniq[i] = yes
 
@@ -394,7 +383,7 @@ $static class IRACStream
       date:date=Date.now()
       from:$config.hostid.irac
       body:'= Media Stream ='
-      hash:@hash=$sha1($config.hostid.root + $config.hostid.irac + date)
+      hash:@hash=$sha1($config.hostid.ra + $config.hostid.irac + date)
     IRACStream.byHash[@hash] = @
     @path = $path.sharedHash @hash
     console.log ' STREAM '.white.bold.inverse, @hash, @path
@@ -447,11 +436,13 @@ $command set: (id,key,value)->
   do $app.sync
   true
 
-$command ssh_empeer: process.cli.ssh_empeer = (host)->
+$command ssh_empeer: (host)->
   hostname = $md5 host; peer = null
   $async.series [
-    (c)=> $cp.exec """ssh #{host} hostname""", => do c
-    (c)=> c null, peer = $auth.setupKeys $md5 host
+    (c)=> $cp.exec """ssh #{host} hostname""", (error,host)=>
+      hostname = host.trim() if host and host.trim and host.trim().length > 1
+      do c
+    (c)=> c null, peer = $auth.createHost hostname, host
     (c)=> $cp.exec """
       cd #{$path.configDir} &&
       tar cjvf - ca/ca.pem ca/intermediate_ca.pem ca/#{hostname}* modules/* |
@@ -466,8 +457,4 @@ $command ssh_empeer: process.cli.ssh_empeer = (host)->
       cd; touch  .config/gear/ca/ca_outlet
       cd; coffee .config/gear/modules/gear.coffee install
     """ ); setTimeout (-> do c), 3000
-    (c)=>
-      cert = peer.cert
-      delete peer.cert; delete peer.key; delete peer.pem
-      Peer.sync new Peer peer, name:host, group:['$host'], address:host, remote:cert
-      null ]
+    (c)=> Peer.sync peer; null ]

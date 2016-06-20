@@ -4,19 +4,19 @@ if $app? then return $app.on 'web:listening', ->
   $command ui_list:->
     format_peer = (peer)-> Object.assign {},
       date: peer.lastSeen
-      root: peer.root
+      ra: peer.ra
       irac: peer.irac
       name: peer.name
       caname: peer.caname
       online: Request.connected[irac]?
-    o = $peer:{}, $channel:{}, $hostid: irac:$config.hostid.irac, root:$config.hostid.root
+    o = $peer:{}, $channel:{}, $hostid: irac:$config.hostid.irac, ra:$config.hostid.ra
     for irac, peer of PEER
       o.$peer[irac]      = p = format_peer peer
-      o.$peer[peer.root] = r = Object.assign {}, p
-      r.irac = r.root
+      o.$peer[peer.ra] = r = Object.assign {}, p
+      r.irac = r.ra
     for name, channel of Channel.byName
-      if name[0] is '@'
-        o.$peer[name.substr 1].msgout = channel.list.length
+      if name[0] is '@' and p = o.$peer[name.substr 1]
+        p.msgout = channel.list.length
       o.$channel[name] = name:name
     return o
 
@@ -151,13 +151,13 @@ window.Channel = class Channel
     @update opts
     if $me
       Channel.$irac = @ if @name is '@' + $me.irac
-      Channel.$root = @ if @name is '@' + $me.root
+      Channel.$root = @ if @name is '@' + $me.ra
   update:(opts)->
     Object.assign @, opts
     if @name[0] is '@'
       opts.list = opts.list || []
       opts.list = opts.list.concat ( Channel.$irac || {list:[]} ).list.filter ( (i)-> i.from is @name ) unless @name is '@' + $me.irac
-      opts.list = opts.list.concat ( Channel.$root || {list:[]} ).list.filter ( (i)-> i.from is @name ) unless @name is '@' + $me.root
+      opts.list = opts.list.concat ( Channel.$root || {list:[]} ).list.filter ( (i)-> i.from is @name ) unless @name is '@' + $me.ra
     @list = ( opts.list || [] ).concat ( @list || [] ).sort Channel.sortNormal
     Channel.byName.all.list = Channel.byName.all.list.concat(opts.list || []).sort Channel.sortNormal
     return @ if @name[0] is '$'
@@ -182,15 +182,16 @@ window.Peer = class Peer
     # console.log @
   update:(opts)->
     Object.assign @, opts
+    return console.log @, opts unless @irac
     @name   = @name   || @irac.substr(0,6)
-    @caname = @caname || @root.substr(0,6)
-    @channelName = '@' + @root
+    @caname = @caname || @ra.substr(0,6) if @caname or @ra
+    @channelName = '@' + @ra
     @peerName = '@' + @irac
-    ca = Peer.byCA[opts.root] || Peer.byCA[opts.root] = []
+    ca = Peer.byCA[opts.ra] || Peer.byCA[opts.ra] = []
     ca.push @
     ca.name = @caname
-    unless ( c = $ '.message.peer.byIrac_' + @root ).length > 0
-      $('#peer').prepend c = $ Channel.buddy @root, @caname, @date
+    unless ( c = $ '.message.peer.byIrac_' + @ra ).length > 0
+      $('#peer').prepend c = $ Channel.buddy @ra, @caname, @date
       $(c.find('.from')[0]).on 'click', Channel.set.bind Channel, @channelName, @caname
     unless ( e = $ '.message.peer.byIrac_' + @irac ).length > 0
       c.append e = $ Channel.peer @irac, @name
@@ -233,12 +234,12 @@ htmlentities = (str) ->
 Channel.text = (item)->
   unless name = Peer.byCA[item.from]
     if sa = Peer.bySA[item.from]
-      name = sa.name + '.' + Peer.byCA[sa.root].name
+      name = sa.name + '.' + Peer.byCA[sa.ra].name
     else item.from.substr(0,6)
   else name = name.name
   unless to = Peer.byCA[item.channel]
     if sa = Peer.bySA[item.channel.substr(1)]
-      to = sa.name + '.' + Peer.byCA[sa.root].name
+      to = sa.name + '.' + Peer.byCA[sa.ra].name
     else to = item.channel
   else to = to.name
   """

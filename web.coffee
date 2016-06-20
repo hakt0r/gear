@@ -59,10 +59,12 @@ $app.on 'daemon', ->
   WebSocketServer = require('ws').Server
   $web.wss = new WebSocketServer server:$web.https
   $web.https.on 'request', (req,res)->
-    if false is $auth.verify req, req.client, true
-      console.log 'REJECT'
+    req.client.inbound = yes
+    if false is req.peer = res.peer = Peer.fromSocket req.client
+      console.error 'REJECT', Peer.format(req.peer)
       return res.end ''
-    $web.apply @, arguments
+    console.hardcore 'ACCEPT', Peer.format(req.peer)
+    return $web.apply @, arguments
   $web.use do require('compression') unless $config.web.disableCompression
   $web.use do require('body-parser').json
   $web.use require('morgan') 'combined', stream: process.stderr if $config.web.log
@@ -75,13 +77,13 @@ $app.on 'web:listening', -> $web.get '/rpc/*', (rx,tx,nx)->
   if args[ l - 1 ][0] is '{' then try
     opts = JSON.parse decodeURIComponent args[l]
     do args[l] = opts # this will enact opts no nee for a catch
-  # console.hardcore 'GET-RPC', typeof args, $util.inspect args
   peer = rx.peer
+  console.hardcore 'GET-RPC', typeof args, $util.inspect args
   new $rpc.scope web:{req:rx,res:tx,next:nx}, group:peer.group, peer:peer, cmd:args, reply:$web.REPLY rx,tx
 
 $app.on 'web:listening', -> $web.post '/rpc', (rx,tx,nx)->
-  # console.hardcore 'POST-RPC', typeof rx.body, $util.inspect rx.body
   peer = rx.peer
+  peer.hardcore  'POST-RPC', typeof rx.body, $util.inspect rx.body
   new $rpc.scope web:{req:rx,res:tx,next:nx}, group:peer.group, peer:peer, cmd:rx.body, reply:$web.REPLY rx,tx
 
 $app.emit 'web:start'

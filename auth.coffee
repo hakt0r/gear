@@ -26,13 +26,27 @@ return unless $require ->
   @apt certutil: 'libnss3-tools'
   @npm 'node-forge'
 
+setImmediate ->
+  $static $auth: new Peer.CA
+  do $require.Module.byName.auth.resolve
+
+$app.on 'daemon', ->
+  console.log ' IRAC '.blue.bold.inverse, Peer.format($config.hostid)
+  for i,p of $config.peers when i isnt $config.hostid.irac
+    delete $config.peers[i]
+    new Peer.Remote p
+  null
+
+$static PEER: $config.peers = $config.peers || {}
+
 { tls, asn1, pkcs12, pki, md } = forge = $require 'node-forge'
 { md5, sha1, sha256, sha512 }   = md
 { rsa } = pki
 
-cipherSuites = [
-  tls.CipherSuites.TLS_RSA_WITH_AES_128_CBC_SHA
-  tls.CipherSuites.TLS_RSA_WITH_AES_256_CBC_SHA ]
+pki.pemCertificateToPemURL = (cert,proto='irac') -> proto + '.' + cert.replace(/[\r\n]/g,'').replace(/-----[A-Z ]+-----/g,'')
+pki.pemCertificateFromPemURL = (url) -> '-----BEGIN CERTIFICATE-----\r\n' + url.replace(/^[^.]+\./,'') + '\r\n-----END CERTIFICATE-----'
+pki.certificateToPemURL = (cert,proto='irac') -> pki.pemCertificateToPemURL pki.certificateToPem(cert), proto
+pki.certificateFromPemURL = (url) -> pki.certificateFromPem pki.pemCertificateFromPemURL url
 
 $static
   $pki: pki
@@ -73,310 +87,330 @@ $static
     key = key || $auth.cakey.publicKey
     $B32 new Buffer pki.getPublicKeyFingerprint(key,md:sha256.create()).data, 'binary'
 
-$config.peers = $config.peers || {}
+$static class ACL
+  @group:
+    $local:  ['$public','$peer','$buddy','$host']
+    $host:   ['$public','$peer','$buddy']
+    $buddy:  ['$public','$peer']
+    $peer:   ['$public']
+    $public: []
+  @check: (target,group...)->
+    return false unless has = target.group
+    return true  for g in group when -1 isnt has.indexOf g
+    false
+  @highest:(groups)->
+    return g for g,v of ACL.group when -1 isnt groups.indexOf g
+    return '$public'
 
 $static class Peer
-  constructor:(auth,settings)->
-    return false if false is auth
-    return false unless auth.irac
-    if (peer = PEER[auth.irac])? and peer.update
-      return peer.update(auth,settings)
-    else @update auth, settings
-    Peer.byIRAC[@irac] = @
-    Peer.pushCA @root, @ if @root
-    console.log Peer.format(@), ' PEER '.blue.bold.inverse
-  parseCertificate:(cert=@pem,ca)->
-    Object.assign @, $auth.parseCertificate cert, ca
-    @cachain = ca if ca
-    Peer.pushCA @root, @ if @root
-    do $app.sync
-    console.log Peer.format(@), ' PEER-UPGRADE '.blue.bold.inverse
-  update:(auth,settings)->
-    Object.assign @, settings, auth
-    do @groups
-    do $app.sync
   groups:(args...)->
     @group = @group || ['$public']
     @group = @group.concat args
-    @group = @group.concat ['$public','$peer','$buddy','$host'] unless -1 is @group.indexOf '$local'
-    @group = @group.concat ['$public','$peer','$buddy']         unless -1 is @group.indexOf '$host'
-    @group = @group.concat ['$public','$peer']                  unless -1 is @group.indexOf '$buddy'
-    @group = @group.concat ['$public']                          unless -1 is @group.indexOf '$peer'
+    @group.slice().map (g)=> @group = @group.concat add if add = ACL.group[g]
     @group = Array.unique @group
+  register:->
+    return unless @irac
+    do $app.sync
+    Peer.byIRAC[@irac] = @
+    return unless @ra
+    l = Peer.byCA[@ra] = Peer.byCA[@ra] || list:[]
+    l.list.push l[@irac] = @
+    return
+
+Peer::hardcore = Peer::verbose = Peer::debug = Peer::log = (args...)->
+  console.log.apply console, [Peer.format(@)].concat args
+
+Object.defineProperty Peer::, 'auth', get:->
+  ra:@ra,ia:@ia,irac:@irac,onion:@onion,remote:@remote,cert:@cert,cachain:@cachain,group:@group
+
+class Peer.Shadow extends Peer
+  shadow:true
+  group:['$public']
+  constructor:(opts)->
+    return peer if ( peer = PEER[opts.irac] )?
+    Object.assign @, opts
+    return false unless @irac
+    Request.static @, ['irac_peer',$config.hostid.cachain], $nullfn
+    PEER[@irac] = @
+  toJSON:-> false
+  toBSON:-> false
+
+class Peer.Remote extends Peer
+  constructor:(cert,settings)->
+    cert = ( settings = cert ).remote if cert and cert.remote
+    direction = if cert.inbound then 'in' else 'out'
+    @[k] = v for k,v of settings when v? if settings
+    unless cert? and ( cert.raw or cert.substr )
+      console.error '  PEER WITHOUT CERTIFICATE '.red.bold.inverse
+      return false
+    if false is @parseCert cert
+      console.error '  PEER WITHOUT IRAC-CERTIFICATE '.red.bold.inverse, cert
+      return false
+    if ( peer = PEER[@irac] )?
+      peer.onion = @onion if @onion
+      peer.log '  EXISTING-PEER '.red.bold.inverse, @cachain?
+      return peer
+    if cert.authorized # XXX and not @group
+      @log  '  AUTO-PEER '.red.bold.inverse, @irac
+      signedGroup = cert.subject.OU.toString().replace /\$local/, '$host'
+      @groups signedGroup
+    else @groups '$public'
+    do @register
+    @verbose '  PEER '.blue.bold.inverse, cert.authorized
+    Peer.sync @ if ACL.check @, '$peer'
+
+  parseCert:(cert)->
+    cert = @remote unless cert
+    # try to parse an IRAC-cert
+    sa_crt = ( if cert.substr then pki.certificateFromPem cert else
+      pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.raw, 'raw' )
+    @irac   = $irac sa_crt.publicKey
+    @remote = pki.certificateToPem sa_crt
+    @onion  = sa_crt.subject.getField('O').value
+    try
+      @cachain = sa_crt.extensions.find( (i)-> i.name is 'subjectAltName').altNames.filter( (i)-> i.value.match /^irac_..\./ ).map( (i)-> i.value ).map(pki.pemCertificateFromPemURL)
+      @ra = $irac pki.certificateFromPem(@cachain[0]).publicKey
+      @ia = $irac pki.certificateFromPem(@cachain[1]).publicKey
+    return false unless @irac? and @ia? and @ra?
+    @log  '  PEER '.white.bold.inverse, @cachain?, PEER[@irac]?
+
+Peer.fromSocket = (socket)->
+  cert = socket.getPeerCertificate yes
+  cert.inbound = socket.inbound
+  cert.authorized = socket.authorized
+  cert.authorizationError = socket.authorizationError
+  if cert.issuerCertificate and cert.inbound then try opts = cachain:[
+    pki.certificateToPem pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.issuerCertificate.issuerCertificate.raw, 'raw'
+    pki.certificateToPem pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.issuerCertificate.raw, 'raw' ]
+  peer = new Peer.Remote cert, opts
+  peer.log  '  NETWORK-PEER '.red.bold.inverse, cert.issuerCertificate?, cert.inbound
+  peer
+
+class Peer.CA extends Peer
+  group:  ['$local']
+  direct: yes
+  myself: yes
+  constructor:->
+    Object.assign @, $config.hostid || {}
+    $config.hostid = @
+    @serial = @serial || 0
+    do @setupFiles
+    do @setupCA
+    @cachain = [
+      pki.certificateToPem @ca
+      pki.certificateToPem @intermediate_ca ]
+    Object.assign @, do @setupKeys
+    do @installKeys
+    do @register
+    Object.freeze(@group)
 
 $static PEER: Peer.byIRAC = $config.peers
 
 Peer.byCA = {}
 
 Peer.format = (peer)->
+  return ' NULL '.red.bold.inverse unless peer
   o = []
-  o.push peer.name.substr(0,6).green.bold if peer.name
-  o.push peer.root.substr(0,6).green.bold if peer.root
-  o.push peer.ia.substr(0,2).blue.bold if peer.ia
-  o.push peer.irac.substr(0,6).yellow.bold if peer.irac
-  o.push peer.onion.white.bold if peer.onion
-  o = o.join '.'
+  o = o.concat ['[',peer.name.substr(0,6).green.bold,']'] if peer.name
+  o.push ( peer.irac  || 'XX' ).substr(0,2).yellow.bold
+  o.push ( peer.ia    || 'XX' ).substr(0,2).blue.bold
+  o.push ( peer.ra  || 'XX' ).substr(0,2).green.bold
+  o.push ( peer.onion || 'XX' ).substr(0,2).white.bold
+  o = o.join ''
+  if peer.group
+    o += '[' + ACL.highest(peer.group).white.bold + ']'
   if peer.address
     o + '[' + ( if peer.address is peer.irac then DIRECT[peer.address] || "n/a" else peer.address ).yellow.bold + ']'
   else o
 
-Peer.pushCA = (root,peer)->
-  l = Peer.byCA[root] = Peer.byCA[root] || list:[]
-  l.list.push l[peer.irac] = peer
-  l
-
-new class Auth
-  constructor: (ready) ->
-    $static $auth: @
-    $config.hostid = $config.hostid || {}
-    $config.hostid.serial = $config.hostid.serial || 0
-
-    do @setupFiles
-    do @setupCA
-    keys = do @setupKeys
-    do @installKeys
-    Object.assign @, keys
-    ca_intr = pki.certificateToPem @intermediate_ca
-    ca_root = pki.certificateToPem @ca
-    cachain = [ca_root, ca_intr]
-    Object.assign $config.hostid,
-      ca:      ca_intr
-      cachain: [ca_root,ca_intr]
-      group:   ['$local']
-      direct:  yes
-      myself:  yes
-    $config.hostid = new Peer keys, $config.hostid
-    console.log ' IRAC '.blue.bold.inverse, Peer.format($config.hostid)
-
-    for i,p of $config.peers when i isnt @irac
-      # console.log p
-      p = new Peer {}, p
-
-    do $require.Module.byName.auth.resolve
-
-  parseCertificate: (cert,ca)->
-    return false unless cert
-    try
-      sa_crt = (
-        if typeof cert is 'string' then pki.certificateFromPem cert
-        else if cert.raw then           pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.raw, 'raw' )
-      if cert.issuerCertificate
-        ia_crt  = pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.issuerCertificate.raw, 'raw'
-        ca_crt  = pki.certificateFromAsn1 asn1.fromDer forge.util.createBuffer cert.issuerCertificate.issuerCertificate.raw, 'raw'
-      else if ca then [ ca_crt, ia_crt ] = ca.map(pki.certificateFromPem)
-      sa_irac = $irac sa_crt.publicKey
-      if ia_crt and ca_crt
-        ia_irac = $irac ia_crt.publicKey
-        ca_irac = $irac ca_crt.publicKey
-      return {
-        remote:  pki.certificateToPem sa_crt
-        remotepub: pki.publicKeyToPem sa_crt.publicKey
-        irac:sa_irac
-        ia:ia_irac
-        root:ca_irac
-        onion:sa_crt.subject.getField('O').value }
-    catch exception then console.error ' PARSE-CERTIFICATE '.red.bold.inverse, cert, exception.stack || exception
-    return false
-
-  verify: (target,socket,inbound)->
-    unless ( cert = socket.getPeerCertificate true )?
-      console.log ' CONNECTION WITHOUT CERTIFICATE '.red.inverse, ' WILL NOT BE TOLERATED '.red.inverse.bold
-      return false
-    if false is ( opts = $auth.parseCertificate cert )
-      console.log ' CONNECTION WITHOUT IRAC-CERTIFICATE '.red.inverse, ' WILL NOT BE TOLERATED '.red.inverse.bold
-      console.log ' SUBJECT '.red.inverse, cert.subject
-      return false
-    { irac, root, host, ia } = opts
-    dir = if inbound then 'inbound' else 'outbound'
-    realSocket = socket.outSocket || socket
-    if true is ( cert.authorized = realSocket.authorized )
-      if inbound and not PEER[irac]
-        console.log ' AUTO-PEER '.red.bold.inverse, irac
-        peer = new Peer opts, group:[cert.subject.OU.toString().replace /\$local/,'$host']
-      if peer or peer = PEER[irac]
-        target.irac = cert.irac = irac
-        socket.getPeerCertificate = -> cert
-        console.log " PEER-AUTH(#{dir}) ".green.inverse, Peer.format(peer)
-        console.debug peer.group.join('/'), Object.keys(peer).join('/')
-        return target.peer = socket.peer = peer
-    console.error " PUBLIC(#{dir}) ".red.inverse, cert.subject.CN, ( socket.outSocket || socket ).authorizationError
-    console.error " PUBLIC(#{dir}) ".red.inverse, host, ia, root, cert.subject
-    target.peer = socket.peer = new Peer opts, group:['$public']
-
-  setupFiles:->
-    $path.ca = (args...)-> $path.join.apply $path, [$path.configDir,'ca'].concat args
-    $path.cadir = $path.ca()
-    unless $fs.existsSync $path.cadir
-      $fs.mkdirp.sync $path.cadir # ca directory
-
-  setupCA:->
-    bits = 1024
-    ca_extensions = [
-      { name: 'basicConstraints', cA: true }
-      { name: 'keyUsage', keyCertSign: true, digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true }
-      { name: 'extKeyUsage', serverAuth: true, clientAuth: true, codeSigning: true, emailProtection: true, timeStamping: true }
-      { name: 'nsCertType', client: true, server: true, email: true, objsign: true, sslCA: true, emailCA: true, objCA: true }
-      { name: 'subjectKeyIdentifier' } ]
-    # CA KEY
-    unless @caDisabled = $fs.existsSync $path.ca 'ca_outlet'
-      unless $fs.existsSync path = $path.ca 'ca-key.pem'
-        @cakey = rsa.generateKeyPair bits: bits, e: 0x10001
-        $fs.writeFileSync path, pki.privateKeyToPem @cakey.privateKey
-        console.log (' CA-KEY['+bits+'-bit/RSA] ').yellow.bold.inverse, $irac @cakey.publicKey
-      else @cakey =
-        privateKey: privateKey = pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
-        publicKey:  pki.setRsaPublicKey privateKey.n, privateKey.e
-      # INTERMEDIATE_KEY
-      unless $fs.existsSync path = $path.ca 'intermediate_ca-key.pem'
-        @intermediate_key = rsa.generateKeyPair bits: bits, e: 0x10001
-        $fs.writeFileSync path, pki.privateKeyToPem @intermediate_key.privateKey
-        console.log (' IC-KEY['+bits+'-bit/RSA] ').yellow.bold.inverse, $irac @intermediate_key.publicKey
-      else @intermediate_key =
-        privateKey: privateKey = pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
-        publicKey:  pki.setRsaPublicKey privateKey.n, privateKey.e
-      @root = $irac @cakey.publicKey
-    # CA CERTIFICATE
-    unless $fs.existsSync path = $path.ca 'ca.pem'
-      @ca = pki.createCertificate()
-      @ca.publicKey = @cakey.publicKey
-      # @ca.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
-      @ca.validity.notBefore = new Date
-      @ca.validity.notAfter  = new Date
-      @ca.validity.notAfter.setFullYear @ca.validity.notBefore.getFullYear() + 1
-      @ca.setSubject @attrs '', @root, '$ca'
-      @ca.setIssuer  @attrs '', @root, '$ca'
-      @ca.setExtensions ca_extensions
-      @ca.sign @cakey.privateKey, sha256.create()
-      $fs.writeFileSync path, pki.certificateToPem @ca
-    else @ca = pki.certificateFromPem $fs.readFileSync path, 'utf8'
-    # INTERMEDIATE_CA
-    unless $fs.existsSync path = $path.ca 'intermediate_ca.pem'
-      crt = pki.createCertificate()
-      crt.publicKey = @intermediate_key.publicKey
-      crt.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
-      crt.validity.notBefore = new Date
-      crt.validity.notAfter  = new Date
-      crt.validity.notAfter.setFullYear crt.validity.notBefore.getFullYear() + 1
-      crt.setIssuer  @attrs '', @root, '$ca'
-      crt.setSubject @attrs $irac(@intermediate_key.publicKey).substr(0,6), @root, '$ca'
-      crt.setExtensions ca_extensions
-      crt.sign @cakey.privateKey, sha256.create()
-      $fs.writeFileSync path, pki.certificateToPem @intermediate_ca = crt
-    else @intermediate_ca = pki.certificateFromPem $fs.readFileSync path, 'utf8'
-    @ia   = $irac @intermediate_ca.publicKey
-    @root = $irac @ca.publicKey
-    null
-
-  setupKeys:(host='me')-> # onion / server / client key - package
-    exports = {}
-    unless $fs.existsSync path = $path.ca host+'_onion.pem'
-      o = do $onion
-      $fs.writeFileSync path, o.pem
-      $fs.writeFileSync $path.ca(host+'_onion.pub'), o.pem_public
-    else o = $onion $fs.readFileSync $path.ca(host+'_onion.pub'), 'utf8'
-    exports.onion = o.onion
-    unless $fs.existsSync path = $path.ca host+'.pem'
-      exports.key = rsa.generateKeyPair bits: 1024, e: 0x10001
-      $fs.writeFileSync path, pki.privateKeyToPem exports.key.privateKey
-      console.log ' HOST '.green.bold.inverse, host, $irac exports.key.publicKey
-    else exports.key =
-      privateKey: privateKey = pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
-      publicKey:  publicKey  = pki.setRsaPublicKey privateKey.n, privateKey.e
-      modulus: publicKey.n.toString(16).toUpperCase()
-    unless $fs.existsSync path = $path.ca host+'.crt' # certificate / pem
-      exports.irac = $irac exports.key.publicKey
-      cert = pki.createCertificate()
-      cert.signatureOid = pki.oids['rsaEncryption']
-      cert.publicKey    = exports.key.publicKey
-      cert.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
-      cert.validity.notBefore = new Date
-      cert.validity.notAfter  = new Date
-      cert.validity.notAfter.setFullYear cert.validity.notBefore.getFullYear() + 1
-      cert.setIssuer @intermediate_ca.subject.attributes
-      cert.setSubject @attrs exports.irac.substr(0,6) + '.', @root, (if host is 'me' then '$local' else '$host'), exports.onion
-      cert.setExtensions [
-        { name: 'extKeyUsage', serverAuth:  true, clientAuth: true, timeStamping: true }
-        { name: 'subjectAltName', altNames: [
-          { type: 2, value: exports.irac.substr(0,6) + '.' + @root + '.irac' }
-          { type: 2, value: exports.irac }
-          { type: 2, value: exports.onion }
-          { type: 2, value: 'irac' }
-          { type: 2, value: 'localhost' }
-          { type: 7, ip: '127.0.0.1' } ] } ]
-      cert.sign @intermediate_key.privateKey, sha256.create()
-      $fs.writeFileSync path, exports.cert = pki.certificateToPem cert
-    else exports.cert = $fs.readFileSync path, 'utf8'
-    unless $fs.existsSync path = $path.ca(host+'.p12') # certificate / pkcs12 - for browsers
-      p12 = pkcs12.toPkcs12Asn1 exports.key.privateKey, [exports.cert,@ca], '', algorithm:'3des'
-      $fs.writeFileSync path, new Buffer asn1.toDer(p12).getBytes(), 'binary'
+Peer.CA::setupKeys = (host='me')-> # onion / server / client key - package
+  exports = {}
+  unless $fs.existsSync path = $path.ca host+'_onion.pem'
+    o = do $onion
+    $fs.writeFileSync path, o.pem
+    $fs.writeFileSync $path.ca(host+'_onion.pub'), o.pem_public
+  else o = $onion $fs.readFileSync $path.ca(host+'_onion.pub'), 'utf8'
+  exports.onion = o.onion
+  unless $fs.existsSync path = $path.ca host+'.pem'
+    exports.key = rsa.generateKeyPair bits: 1024, e: 0x10001
+    $fs.writeFileSync path, pki.privateKeyToPem exports.key.privateKey
+    console.log ' HOST '.green.bold.inverse, host, $irac exports.key.publicKey
+  else exports.key =
+    privateKey: privateKey = pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
+    publicKey:  publicKey  = pki.setRsaPublicKey privateKey.n, privateKey.e
+    modulus: publicKey.n.toString(16).toUpperCase()
+  unless $fs.existsSync path = $path.ca host+'.crt' # certificate / pem
     exports.irac = $irac exports.key.publicKey
-    exports.ia = @ia
-    exports.root = @root
-    exports.pem = pki.privateKeyToPem exports.key.privateKey
-    exports
-
-  installKeys:->
-    # if $config.hostid.installed
-    unless $fs.existsSync p = $path.join process.env.HOME, '.pki', 'nssdb'
-      $fs.mkdirp.sync p
-      $cp.spawnSync 'certutil',['-d',p,'-N']
-    $cp.spawn 'certutil',
-      ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-A','-t','TCP','-n',$config.hostid.irac,'-i',$path.ca 'ca.pem'],
-      stdio: 'inherit'
-    $cp.spawn 'pk12util',
-      ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-i',$path.ca('me.p12'),'-W',''],
-      stdio: 'inherit'
-    #  $config.hostid.installed = true
-
-  attrs: (prefix='',irac=@root,ou='$ca',onion='irac')-> return [
-    { shortName: 'CN', value: prefix + irac + '.irac' }
-    { shortName: 'O',  value: onion }
-    { shortName: 'OU', value: ou } ]
-
-  authorize: (peer, group='$peer')->
-    return false if @caDisabled
-    { irac, ia, root, onion, pub } = peer
-    console.log peer.pub
     cert = pki.createCertificate()
-    cert.publicKey = pki.publicKeyFromPem pub
+    cert.signatureOid = pki.oids['rsaEncryption']
+    cert.publicKey    = exports.key.publicKey
     cert.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
     cert.validity.notBefore = new Date
     cert.validity.notAfter  = new Date
     cert.validity.notAfter.setFullYear cert.validity.notBefore.getFullYear() + 1
-    cert.setSubject @attrs '', irac, group
     cert.setIssuer @intermediate_ca.subject.attributes
+    cert.setSubject @attrs exports.irac.substr(0,6) + '.', @ra, (if host is 'me' then '$local' else '$host'), exports.onion
     cert.setExtensions [
-        { name: 'keyUsage', keyCertSign: no, digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true }
-        { name: 'extKeyUsage', serverAuth: true, clientAuth: true, timeStamping: true }
-        { name: 'subjectAltName', altNames: [ { type: 2, value: irac } ] } ]
+      { name: 'extKeyUsage', serverAuth:  true, clientAuth: true, timeStamping: true }
+      { name: 'subjectAltName', altNames: [
+        { type: 2, value: exports.irac.substr(0,6) + '.' + @ra + '.irac' }
+        { type: 2, value: exports.irac }
+        { type: 2, value: exports.onion }
+        { type: 2, value: 'irac' }
+        { type: 2, value: 'localhost' }
+        { type: 2, value: pki.certificateToPemURL @ca, 'irac_ca' }
+        { type: 2, value: pki.certificateToPemURL @intermediate_ca, 'irac_ia' }
+        { type: 7, ip: '127.0.0.1' } ] } ]
     cert.sign @intermediate_key.privateKey, sha256.create()
-    do $app.sync # save serial
-    pki.certificateToPem cert
+    $fs.writeFileSync path, exports.cert = pki.certificateToPem cert
+  else exports.cert = $fs.readFileSync path, 'utf8'
+  unless $fs.existsSync path = $path.ca(host+'.p12') # certificate / pkcs12 - for browsers
+    p12 = pkcs12.toPkcs12Asn1 exports.key.privateKey, [exports.cert,@ca], '', algorithm:'3des'
+    $fs.writeFileSync path, new Buffer asn1.toDer(p12).getBytes(), 'binary'
+  exports.irac = $irac exports.key.publicKey
+  exports.ia = @ia
+  exports.ra = @ra
+  exports.pem = pki.privateKeyToPem exports.key.privateKey
+  exports
 
-  signMessage:(message,key)->
-    key = ( key || @key ).privateKey
-    message.from = $config.hostid.irac
-    message.date = Date.now()
-    md = do sha256.create; md.update (JSON.stringify message), 'utf8'
-    message.sign = (new Buffer key.sign(md),'binary').toString('base64')
-    message
+Peer.CA::createHost = (hostname,address)->
+  exports = @setupKeys hostname
+  exports.remote = exports.cert
+  exports.group = ['$host']
+  exports.name = hostname
+  exports.caname = $auth.caname
+  exports.address = address
+  delete exports.cert
+  delete exports.key
+  delete exports.pem
+  new Peer.Remote exports
 
-  verifyMessage:(message,key)->
-    if message.from is $config.hostid.irac
-      key = @key.publicKey
-    unless key
-      unless ( peer = PEER[message.from] ) and ( cert = peer.remote )
-        console.log 'ENOPEER', Object.keys peer
-        return 'ENOPEER'
-      console.log 'PEER-EXISTS', message, peer
-      key = pki.certificateFromPem(cert).publicKey
-    return 'ENOKEY' unless key
-    sign = message.sign; delete message.sign
-    md = do sha256.create; md.update (JSON.stringify message), 'utf8'
-    message.sign = sign
-    key.verify md.digest().bytes(), new Buffer sign, 'base64'
+Peer.CA::authorize = (peer, group='$peer')->
+  return false if @caDisabled
+  { irac, ia, root, onion, remote } = peer
+  cert = pki.createCertificate()
+  cert.publicKey = pki.certificateFromPem(remote).publicKey
+  cert.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
+  cert.validity.notBefore = new Date
+  cert.validity.notAfter  = new Date
+  cert.validity.notAfter.setFullYear cert.validity.notBefore.getFullYear() + 1
+  cert.setSubject @attrs '', irac, group, peer.onion
+  cert.setIssuer @intermediate_ca.subject.attributes
+  cert.setExtensions [
+      { name: 'keyUsage', keyCertSign: no, digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true }
+      { name: 'extKeyUsage', serverAuth: true, clientAuth: true, timeStamping: true }
+      { name: 'subjectAltName', altNames: [
+        { type: 2, value: irac }
+        { type: 2, value: pki.pemCertificateToPemURL peer.cachain[0], 'irac_ca' }
+        { type: 2, value: pki.pemCertificateToPemURL peer.cachain[1], 'irac_ia' }
+      ] } ]
+  console.log cert
+  cert.sign @intermediate_key.privateKey, sha256.create()
+  do $app.sync # save serial
+  pki.certificateToPem cert
 
-  rpw:(length)->
-    r = forge.random.createInstance()
-    r.seed = Date.now() + parseInt( $md5( JSON.stringify $config ), 16 )
-    $B32 r.generate(length)
+Peer.CA::signMessage = (message,key)->
+  key = ( key || @key ).privateKey
+  message.from = $config.hostid.irac
+  message.date = Date.now()
+  md = do sha256.create; md.update (JSON.stringify message), 'utf8'
+  message.sign = (new Buffer key.sign(md),'binary').toString('base64')
+  message
+
+Peer.CA::verifyMessage = (message,key)->
+  key = @key.publicKey if message.from is $config.hostid.irac
+  unless key
+    unless ( peer = PEER[message.from] ) and ( cert = peer.remote )
+      peer = new Peer.Shadow irac:message.from
+      ( peer.toVerify || peer.toVerify = [] ).push = message
+      return false
+    else key = pki.certificateFromPem(cert).publicKey
+  sign = message.sign; delete message.sign
+  md = do sha256.create; md.update (JSON.stringify message), 'utf8'
+  message.sign = sign
+  key.verify md.digest().bytes(), new Buffer sign, 'base64'
+
+Peer.CA::setupFiles = ->
+  $path.ca = (args...)-> $path.join.apply $path, [$path.configDir,'ca'].concat args
+  $path.cadir = $path.ca()
+  unless $fs.existsSync $path.cadir
+    $fs.mkdirp.sync $path.cadir # ca directory
+
+Peer.CA::setupCA = ->
+  bits = 1024
+  ca_extensions = [
+    { name: 'basicConstraints', cA: true }
+    { name: 'keyUsage', keyCertSign: true, digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true }
+    { name: 'extKeyUsage', serverAuth: true, clientAuth: true, codeSigning: true, emailProtection: true, timeStamping: true }
+    { name: 'nsCertType', client: true, server: true, email: true, objsign: true, sslCA: true, emailCA: true, objCA: true }
+    { name: 'subjectKeyIdentifier' } ]
+  # CA KEY
+  unless @caDisabled = $fs.existsSync $path.ca 'ca_outlet'
+    unless $fs.existsSync path = $path.ca 'ca-key.pem'
+      @cakey = rsa.generateKeyPair bits: bits, e: 0x10001
+      $fs.writeFileSync path, pki.privateKeyToPem @cakey.privateKey
+      console.log (' CA-KEY['+bits+'-bit/RSA] ').yellow.bold.inverse, $irac @cakey.publicKey
+    else @cakey =
+      privateKey: privateKey = pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
+      publicKey:  pki.setRsaPublicKey privateKey.n, privateKey.e
+    # INTERMEDIATE_KEY
+    unless $fs.existsSync path = $path.ca 'intermediate_ca-key.pem'
+      @intermediate_key = rsa.generateKeyPair bits: bits, e: 0x10001
+      $fs.writeFileSync path, pki.privateKeyToPem @intermediate_key.privateKey
+      console.log (' IC-KEY['+bits+'-bit/RSA] ').yellow.bold.inverse, $irac @intermediate_key.publicKey
+    else @intermediate_key =
+      privateKey: privateKey = pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
+      publicKey:  pki.setRsaPublicKey privateKey.n, privateKey.e
+    @ra = $irac @cakey.publicKey
+  # CA CERTIFICATE
+  unless $fs.existsSync path = $path.ca 'ca.pem'
+    @ca = pki.createCertificate()
+    @ca.publicKey = @cakey.publicKey
+    # @ca.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
+    @ca.validity.notBefore = new Date
+    @ca.validity.notAfter  = new Date
+    @ca.validity.notAfter.setFullYear @ca.validity.notBefore.getFullYear() + 1
+    @ca.setSubject @attrs '', @ra, '$ca'
+    @ca.setIssuer  @attrs '', @ra, '$ca'
+    @ca.setExtensions ca_extensions
+    @ca.sign @cakey.privateKey, sha256.create()
+    $fs.writeFileSync path, pki.certificateToPem @ca
+  else @ca = pki.certificateFromPem $fs.readFileSync path, 'utf8'
+  # INTERMEDIATE_CA
+  unless $fs.existsSync path = $path.ca 'intermediate_ca.pem'
+    crt = pki.createCertificate()
+    crt.publicKey = @intermediate_key.publicKey
+    crt.serialNumber = '0x' + ( ++$config.hostid.serial ).toString 16
+    crt.validity.notBefore = new Date
+    crt.validity.notAfter  = new Date
+    crt.validity.notAfter.setFullYear crt.validity.notBefore.getFullYear() + 1
+    crt.setIssuer  @attrs '', @ra, '$ca'
+    crt.setSubject @attrs $irac(@intermediate_key.publicKey).substr(0,6), @ra, '$ca'
+    crt.setExtensions ca_extensions
+    crt.sign @cakey.privateKey, sha256.create()
+    $fs.writeFileSync path, pki.certificateToPem @intermediate_ca = crt
+  else @intermediate_ca = pki.certificateFromPem $fs.readFileSync path, 'utf8'
+  @ia   = $irac @intermediate_ca.publicKey
+  @ra = $irac @ca.publicKey
+  null
+
+Peer.CA::installKeys = ->
+  # if $config.hostid.installed
+  unless $fs.existsSync p = $path.join process.env.HOME, '.pki', 'nssdb'
+    $fs.mkdirp.sync p
+    $cp.spawnSync 'certutil',['-d',p,'-N']
+  $cp.spawn 'certutil',
+    ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-A','-t','TCP','-n',$config.hostid.irac,'-i',$path.ca 'ca.pem']
+  $cp.spawn 'pk12util',
+    ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-i',$path.ca('me.p12'),'-W','']
+  #  $config.hostid.installed = true
+
+Peer.CA::attrs = (prefix='',irac=@ra,ou='$ca',onion='irac')-> return [
+  { shortName: 'CN', value: prefix + irac + '.irac' }
+  { shortName: 'O',  value: onion }
+  { shortName: 'OU', value: ou } ]
+
+Peer.CA::rpw = (length)->
+  r = forge.random.createInstance()
+  r.seed = Date.now() + parseInt( $md5( JSON.stringify $config ), 16 )
+  $B32 r.generate(length)

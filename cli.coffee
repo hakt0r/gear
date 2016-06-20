@@ -20,10 +20,15 @@
 ###
 
 if $path?
+  unless $fs.existsSync $path.backend = $path.join $path.bin, 'gear-daemon'
+    $fs.writeFileSync $path.backend, """
+    #!#{$which 'nodejs' || $which 'node'}
+    require('#{$path.join $path.cache, 'gear.js'}');"""
+    $fs.chmodSync $path.backend, '755' if $fs.chmodSync
+  # unless $fs.existsSync 
   $path.client = $path.join $path.bin, 'gear'
-  unless $fs.existsSync $path.client
-    $fs.writeFile $path.client, $fs.readFileSync __filename
-    $fs.chmodSync $path.client, '755' if $fs.chmodSync
+  $fs.writeFile $path.client, $fs.readFileSync __filename
+  $fs.chmodSync $path.client, '755' if $fs.chmodSync
   return
 
 path = require 'path'
@@ -59,7 +64,7 @@ request = https.request {
   buffer = []
   res.on 'data', (data)-> buffer.push data.toString()
   res.on 'error',  (data)->
-    console.error 'socket_error:', data
+    console.error 'socket_error:', data # unless 0 is args.indexOf 'stop'
   res.on 'end',  (data)->
     d = buffer.join ''
     process.exit 0 if d is ''

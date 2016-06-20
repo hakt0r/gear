@@ -42,31 +42,11 @@ $fs.mkdirSync $path.shared unless $fs.existsSync $path.shared
 $app.on 'web:listening', ->
   $web.static = require('serve-static')($path.shared)
   $web.wss.on "connection", (socket)->
-    unless false is $auth.verify socket, socket._socket, true
-      console.debug Peer.format(socket.peer), ' ACCEPT-WSS '.green.bold.inverse
-      Request.acceptSocket socket
-    else
-      console.error ' REJECT-WSS '.red.bold.inverse, ' Invalid- or non-IRAC certificate '.red.bold
-      socket.close()
-    null
-
-###
-  PEER-PROBE
-###
-
-Peer.probe = (peer) ->
-  console.debug Peer.format(peer), ' PROBE '.yellow.inverse.bold
-  Peer.sync peer
-  null
-
-Peer.probe.all = ->
-  for k,peer of PEER
-    console.log k
-    if k isnt $config.hostid.irac
-      Peer.probe peer
-  null
-
-$app.on 'daemon', -> do Peer.probe.all
+    socket.inbound = yes
+    if false is socket.peer = Peer.fromSocket socket._socket
+      console.error fail ' REJECT-WSS - Invalid- or non-IRAC certificate '
+      return socket.close()
+    Request.acceptSocket socket
 
 ###
   REQUEST
@@ -79,7 +59,7 @@ $static Request: (peer,args,callback) ->
   q = queue[irac]  = queue[irac]  || queue[irac]  = []
   q.push arguments
   a.counter = 0 unless a.counter?
-  if Request.socket[irac]
+  if Request.connected[irac]
     clearTimeout Request.queue.dirty
     Request.queue.dirty = setImmediate ->
       Request.flush peer
@@ -89,12 +69,11 @@ Request.WebSocket = require 'ws'
 
 Request.queue      = {}
 Request.active     = {}
-Request.socket     = {}
 Request.connecting = {}
 Request.connected  = {}
 
 Request.flush = (peer)->
-  return ( console.error 'REQUEST-NO-SOCKET'; false ) unless socket = Request.socket[irac = peer.irac]
+  return ( console.error 'REQUEST-NO-SOCKET'; false ) unless socket = Request.connected[irac = peer.irac]
   return ( console.error 'REQUEST-NO-QUEUE';  false ) unless queue  = Request.queue[irac]
   return ( console.error 'REQUEST-NO-ACTIVE'; false ) unless active = Request.active[irac]
   for request in queue
@@ -177,22 +156,22 @@ Request.pipe = (peer,args,target,callback) ->
   null
 
 Request.connect = (peer) -> do req = ->
-  return ( console.debug ' WSC-ALREADY-CONNECTED '.green.bold.inverse;  true  ) if Request.socket[irac = peer.irac]
-  return ( console.debug ' WSC-ALREADY-CONNECTING '.red.bold.inverse; false ) if Request.connecting[irac]
+  return ( peer.debug  ' WSC-ALREADY-CONNECTED '.green.bold.inverse; true ) if Request.connected[irac = peer.irac]
+  return ( peer.debug  ' WSC-ALREADY-CONNECTING '.red.bold.inverse; false ) if Request.connecting[irac]
   session = {}; opts = Request.tlsOpts peer, 'wss'
   # console.hardcore 'WSC-CONNECTING', opts.url
   socket = new Request.WebSocket opts.url, opts
   socket.on 'open', ->
-    $auth.verify socket, socket._socket
-    if Request.socket[irac]
-      console.debug ' WSC-DOUBLE '.red.bold.inverse, irac
-      return socket.close()
-    # console.debug 'WSC-CONNECT', irac
+    socket.peer = Peer.fromSocket socket._socket.outSocket || socket._socket
     socket.removeListener 'error', connect_error
-    if socket.peer.irac is peer.irac
-      Request.acceptSocket socket
+    if ( s = Request.connected[irac] ) and s isnt socket
+      peer.debug  ' WSC-DOUBLE '.red.bold.inverse
+      socket.close();
+    else Request.acceptSocket socket if socket.peer.irac is peer.irac
     null
   socket.on 'error', connect_error = (error)->
+    return                          if Request.connected[irac]
+    delete Request.connecting[irac] if Request.connecting[irac] is socket
     return Request.retry 10000, req if error      is 'SOCKS: Host unreachable'
     return Request.retry 10000, req if error      is 'SOCKS: TTL expired'
     return Request.retry 5000,  req if error.code is 'ECONNREFUSED'
@@ -210,20 +189,19 @@ ERROR = -1; REQUEST = 0; RESPONSE = 1
 Request.acceptSocket = (socket)->
   { peer } = socket; ( console.error ' REQUEST-NO-PEER '.red.bold.inverse, peer;  return false ) unless peer?
   { irac } = peer;   ( console.error Peer.format(peer), ' REQUEST-NO-IRAC '.red.bold.inverse;  return false ) unless peer.irac?
-  ( console.debug Peer.format(peer), ' WSC-ALREADY-CONNECTED '.red.bold.inverse; return false ) if Request.socket[peer.irac]
-  console.hardcore Peer.format(peer), ' WS-ACCEPT '.green.bold.inverse
+  peer.hardcore  ' WS-ACCEPT '.green.bold.inverse
 
-  delete Request.connecting[irac]
-  Request.socket[irac = peer.irac] = socket
-  Request.connected[irac] = peer
+  delete Request.connecting[irac] if Request.connecting[irac] is socket
+  Request.connected[irac = peer.irac] = socket
   peer.lastSeen = Date.now()
   Channel.byName.$peer.push peer
 
   _send = socket.send.bind socket
   socket.send = ->
-    # console.hardcore 'WS-SEND', arguments
-    # _send JSON.stringify arguments[0]
-    _send( $cbor.encode(arguments[0],no,yes,no), binary:on, mask:off )
+    try _send( $cbor.encode(arguments[0],no,yes,no), binary:on, mask:off )
+    catch error
+      console.error Peer.format(peer), ' WS-SEND_ERROR ', console.error
+      socket.emit 'close', error
 
   socket.fail = (error,data)->
     console.error Peer.format(peer), error, $util.inspect data
@@ -234,7 +212,7 @@ Request.acceptSocket = (socket)->
     # catch e then return console.error Peer.format(peer), ' WS-INVALID-JSON '.red.bold.inverse, $util.inspect m
     try m = $cbor.decode m
     catch e then return console.error Peer.format(peer), ' WS-INVALID-BSON '.red.bold.inverse, $util.inspect m
-    # console.hardcore Peer.format(peer), 'WS-MESSAGE', $util.inspect m
+    # peer.hardcore  'WS-MESSAGE', $util.inspect m
 
     return socket.fail Peer.format(peer), ' WS-NOT-AN-ARRAY '.red.bold.inverse, m unless Array.isArray m
 
@@ -249,7 +227,7 @@ Request.acceptSocket = (socket)->
     else if ( msgType is RESPONSE ) and ( queue = Request.active[irac] )?
       for request in queue.slice() when request.uid is uid
         if typeof ( callback = request[2] ) is 'function'
-          console.debug Peer.format(peer), ' WS-RESPONSE '.green.bold.inverse, uid, $util.inspect msg
+          # peer.hardcore  ' WS-RESPONSE '.green.bold.inverse, uid, $util.inspect msg
           callback.apply null, [null].concat msg
         Array.remove queue, request
         break
@@ -265,10 +243,9 @@ Request.acceptSocket = (socket)->
     null
 
   socket.on 'close', (error)->
-    console.debug Peer.format(peer), ' WS-CLOSE '.blue.bold.inverse
-    delete Request.socket[irac]
-    delete Request.connecting[irac]
-    delete Request.connected[irac]
+    peer.debug  ' WS-CLOSE '.blue.bold.inverse, error
+    delete Request.connecting[irac] if socket is Request.connecting[irac]
+    delete Request.connected[irac]  if socket is Request.connected[irac]
     peer.lastSeen = Date.now()
     Channel.byName.$peer.pull peer
     return if irac is $config.hostid.irac

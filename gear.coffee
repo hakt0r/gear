@@ -77,6 +77,7 @@ $logo = (get)->
   return o if get
   print = process.stderr.write.bind process.stderr; print '\n\n\n'; print o; print '\n\n\n'
 
+process.title = """GEAR_#{process.pid}"""
 
 global.$static = (args...) -> while a = do args.shift
   if ( t = typeof a ) is 'string' then global[a] = do args.shift
@@ -128,10 +129,19 @@ $static $debug: $function
     c.verbose = log; c.debug = ( if @debug then log else $nullfn ); c.hardcore = ( if @hardcore then log else $nullfn )
     c.log '\x1b[43;30mDEBUG MODE\x1b[0m', @debug, @hardcore, c.hardcore
   disable:-> $debug.active = no; c = console; c.log = c._log || c.log; c.hardcore = c.debug = c.verbose = ->
-  (fn) -> do fn if $debug.activ and fn and fn.call
+  (fn) -> do fn if $debug.active and fn and fn.call
 unless -3 is process.argv.indexOf('-D') + process.argv.indexOf('-d') + process.argv.indexOf('-v')
   $debug.enable -1 isnt process.argv.indexOf('-d'), -1 isnt process.argv.indexOf('-D')
 else do $debug.disable
+
+unless -1 is process.argv.indexOf('-Q')
+  try process.stderr.close() if process.stderr
+  try process.stdout.close() if process.stdout
+  try process.stdin.close()  if process.stdin
+  try process.stderr.write = ->
+  console.log = console.error = console.verbose = console.debug = console.hardcore = ->
+  $util.print = ->
+  process.on 'uncaughtException', (error)-> $fs.appendFileSync __dirname + '/error.log', JSON.stringify error
 
 ### RPC RPC *     RPC RPC *       * RPC RPC
     RPC     RPC   RPC     RPC   RPC
@@ -167,7 +177,7 @@ class $rpc.scope
     @fnc = $command.byName[@cmd] if @cmd.match
     return @error "Could not find #{_cmd}"                             unless @fnc?
     return @error "Not a function #{_cmd}"                             unless @fnc.apply? or @fnc.push?
-    return @error "Access denied: #{_cmd}, no gorup"                   unless @group?
+    return @error "Access denied: #{_cmd}, no group"                   unless @group?
     return @error "Access denied: #{_cmd}, non-rpc function"           unless @fnc.group? and Array.isArray @fnc.group
     return @error "Access denied: have[#{@group}] need[#{@fnc.group}]" unless Array.commons(@fnc.group,@group).length > 0
     _reply = @reply; @reply = => @finish _reply.bind @, arguments[0]
@@ -221,7 +231,7 @@ $command clist: (path='') ->
 $command shutdown: -> process.exit 0
 $command linger:->
 
-process.cli =
+$app.cli =
   show:(path)->
     process.exit 1 unless t = Object.resolve $config, path
     console.log JSON.stringify t; process.exit 0
@@ -235,11 +245,18 @@ process.cli =
   unset:(path,key)->
     if key is undefined then o = $config; key = path
     else process.exit 1 unless t = Object.resolve $config, path
-    delete o[key]; $app.sync();
-  restart:-> if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
-  start:-> if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
-  stop:-> if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','stop','gear']
+    delete t[key]; $app.sync();
+  restart:->
+    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
+    else do process.cli.stop; do process.cli.start
+  start:->
+    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
+    else $cp.spawn $path.join($path.bin,'gear-daemon'),['daemon','-Q'], detach:yes, stdio:null; process.exit 0
+  stop:->
+    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','stop','gear']
+    else $cp.spawn 'kill',[parseInt $fs.readFileSync p, 'utf8'] if $fs.existsSync p = $path.join($path.cache,'daemon.pid')
   daemon:->
+    $fs.writeFileSync ($path.join $path.cache,'daemon.pid'), process.pid
     do $logo
     $app.emit 'daemon:init'
     $app.on 'ready', -> $app.emit 'daemon'
@@ -270,39 +287,34 @@ process.cli =
           systemctl --user enable #{f}
           systemctl --user restart gear
         """, -> console.log '__ GEAR WAS SUCCESSFULLY INSTALLED TO SYSTEMD __'; process.exit(0)
-      else if '/etc/rc.local' then $sudo ['sh','-c',"""
-        [ -n "$EDITOR" && -f "$EDITOR" ] || which nano && EDITOR=nano
-        [ -n "$EDITOR" && -f "$EDITOR" ] || which vim  && EDITOR=vim
-        [ -n "$EDITOR" && -f "$EDITOR" ] || which vi   && EDITOR=vi
+      else if '/etc/rc.local' then $sudo.script """
         if cat /etc/rc.local | grep "# gear-#{UID}"
         then echo "\x1b[32mAlready installed to \x1b[33m/etc/rc.local\x1b[0m"
         else awk '{if(p)print p;p=$0;}END{
-            print "sudo -u #{USER} nodejs #{HOME}/.config/gear/cache/gear.js daemon >/dev/null 2>&1 & # gear-#{UID}"; print p}
+            print "sudo -u #{USER} nodejs #{HOME}/.config/gear/bin/gear-daemon start & # gear-#{UID}"; print p; exit(0)}
           ' /etc/rc.local > /etc/rc.local.new
-          $EDITOR /etc/rc.local.new
-          cat /etc/rc.local.new | grep "# gear-#{UID}" || sh
+          cat /etc/rc.local.new | grep "# gear-#{UID}" | sh
         fi
-      """]
+      """, -> do process.cli.start
     else switch ( pkg = pkg.shift() )
       when 'npm' then $require.npm.install.now pkg
       when 'sys' then $require.apt.install.now pkg
       else console.log 'Don\'t know how to install:', pkg
 
-$command ssh_update: process.cli.ssh_update = (host)->
+$command ssh_update: $app.cli.ssh_update = (host)->
   $async.series [
     (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
     (c)=> $cp.ssh( host, """
       cd; [ -f .gear_setup.tbz ] || exit 1
-      systemctl --user stop gear
+      gear-daemon stop || systemctl --user stop gear
       mv .gear_setup.tbz .config/gear/modules/
       cd .config/gear/modules/
       tar xjvf .gear_setup.tbz
       rm -rf .gear_setup.tbz
       cd; coffee .config/gear/modules/gear.coffee install
-      """ ).on 'close', -> do c
-    ]
+      """ ).on 'close', -> do c ]
 
-$command ssh_install: process.cli.ssh_install = (host)->
+$command ssh_install: $app.cli.ssh_install = (host)->
   $async.series [
     (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
     (c)=> $cp.ssh( host, """
@@ -463,10 +475,10 @@ $app.init = {}
 $app.init.main = ->
   argv = process.argv.slice()
   i = 0; while i++ < argv.length
-    if argv[i].match /gear\.(js|coffee)$/
+    if argv[i].match /gear(-daemon|\.js|\.coffee)$/
       argv.splice(0,i+1); break
   console.hardcore "\x1b[32mCOMMANDLINE\x1b[0m", argv
-  if ( fnc = process.cli[cmd = argv.shift()] )
+  if ( fnc = $app.cli[cmd = argv.shift()] )
     r = fnc.apply $command, argv
   else process.exit 1, console.error "Command not found: ", cmd, argv
   $require.all => $app.emit 'ready'
