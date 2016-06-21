@@ -78,12 +78,12 @@ $app.on 'web:listening', -> $web.get '/rpc/*', (rx,tx,nx)->
     opts = JSON.parse decodeURIComponent args[l]
     do args[l] = opts # this will enact opts no nee for a catch
   peer = rx.peer
-  console.hardcore 'GET-RPC', typeof args, $util.inspect args
+  # console.hardcore 'GET-RPC', typeof args, $util.inspect args
   new $rpc.scope web:{req:rx,res:tx,next:nx}, group:peer.group, peer:peer, cmd:args, reply:$web.REPLY rx,tx
 
 $app.on 'web:listening', -> $web.post '/rpc', (rx,tx,nx)->
   peer = rx.peer
-  peer.hardcore  'POST-RPC', typeof rx.body, $util.inspect rx.body
+  # peer.hardcore  'POST-RPC', typeof rx.body, $util.inspect rx.body
   new $rpc.scope web:{req:rx,res:tx,next:nx}, group:peer.group, peer:peer, cmd:rx.body, reply:$web.REPLY rx,tx
 
 $app.emit 'web:start'

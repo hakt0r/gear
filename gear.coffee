@@ -195,7 +195,7 @@ class $rpc.scope
     delete $rpc.open[@id]; @ctx = @cmd = @args = @opts = @id = null
     @done = true
   error: (message,object=@cmd) ->
-    console.error 'RPC-ERROR'.red.inverse, @cmd, message, object
+    console.error Peer.format(@peer), ' RPC-ERROR '.red.inverse, @cmd, message, object
     @reply error: message, errorData: object
 
 console.rpc    =  '$local'
@@ -704,6 +704,8 @@ Array.random  =   (a) -> a[Math.round Math.random()*(a.length-1)]
 Array.commons = (a,b) -> a.filter (i)-> -1 isnt b.indexOf i
 Array.slice   = (a,c) -> Array::slice.call a||[], c
 Array.unique  =   (a) -> u={}; a.filter (i)-> return u[i] = on unless u[i]; no
+Array::trim   =       -> return ( @filter (i)-> i? and i isnt false ) || []
+
 ### process enhancements ###
 process.cpus = (
   try $fs.readFileSync('/proc/cpuinfo','utf8').match(/processor/g).length

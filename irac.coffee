@@ -119,33 +119,64 @@ $static class PMSGQueue extends Channel
   constructor:(opts)-> super opts
   collect: (peer)-> @list.map (i)-> i.item
 
+Peer.filter = (peer,i)->
+  return false unless peer? and i? and ACL.check peer, '$local', '$host', '$peer'
+  return i if typeof i is 'string'
+  return false if ( i.irac is peer.irac ) or ( i.irac is $config.hostid.irac )
+  onion:i.onion, irac:i.irac, ra:i.ra, ia:i.ia
+
+Peer.filterList = (peer,list)->
+  list.map(Peer.filter.bind(Peer,peer)).trim()
+
 $static class LivePeer
   name: '$peer'
+  list: []
+  byHash: {}
+  byIRAC: {}
   constructor:->
-    @list = @list || []
-    @byHash = {}
-    @byIRAC = {}
-  collect: (peer)->
-    @list.filter( (i)->
-      ( i.item.irac isnt peer.irac ) and ( i.item.irac isnt $config.hostid.irac )
-    ).map( (i)-> i.hash )
-  pull: (peer)->
-    Array.remove @list, peer
-    delete @byHash[peer.irac]
-  get:(peer,list)->
-    unless -1 is peer.group.indexOf '$host'
-      o = ( for i in list when -1 isnt idx = @list.indexOf i
-        p = PEER[@list[idx].item.irac]
-        { caname:p.caname name:p.name, onion:p.onion, address:p.address, irac:p.irac, ra:p.ra } )
-    else return ( @list[idx].item for i in list when ( -1 isnt idx = @list.indexOf i ) )
+  collect: (peer)-> Object.keys(@byHash).filter Peer.filter.bind null, peer
+  get:(peer,list)-> Peer.filterList peer, list.map( (i) => @byHash[i].item ).trim()
+  pull: (source,items...)-> for peer in items
+    continue unless p = @list.find (i)-> i.item.irac is peer.irac
+    Array.remove @list, p
+    delete @byHash[p.hash]
   push: (peer,items...)->
-    items[q] = p = new Peer.Shadow p for p,q in items
-    unless item = @byIRAC[peer.irac]
-      pubRec = name:peer.name, address:peer.address, onion:peer.onion, ra:peer.ra, irac:peer.irac
-      hash = Channel.hash pubRec
-      @list.push hash:hash, date: peer.lastSeen || 0, item: item = @byHash[hash] = @byHash[peer.irac] = pubRec
-    else item.date = Date.now()
-    SyncQueue.distribute peer, '$peer', [item]
+    for p,q in items
+      p = new Peer.Shadow p
+      hash = Channel.hash r = Peer.filter group:['$peer'], p
+      unless item = @byHash[hash]
+        @list.push @byHash[hash] = item = hash:hash, item: r, date: p.lastSeen || 0
+      else item.date = Date.now()
+      items[q] = r
+    # console.hardcore '  FIND  '.red.bold.inverse, Peer.format(peer), items
+    SyncQueue.distribute peer, '$peer', items, null, Peer.filter
+
+class SyncQueue
+  @byIRAC: {}
+  @distribute: (source,channel,items,hashed,filter)->
+    return unless channel?
+    queue = SyncQueue.byIRAC
+    connected = Request.connected
+    source = $config.hostid         unless source?
+    hashed = items.map Channel.hash unless hashed?
+    for irac, socket of connected when irac isnt source.irac or irac is $config.hostid.irac
+      peer = socket.peer
+      direct = peer.direct or channel[0] is '@'
+      q = queue[irac] = queue[irac] || {}
+      l = if direct then items else hashed
+      l = l.map(filter.bind null, peer).filter( (i)-> i? ) if filter
+      q[channel] = ( q[channel] = [] ).concat l
+    @publish()
+  @publish: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
+    send = (irac,channels)->
+      return unless peer = PEER[irac]
+      return unless 0 < Object.keys( channels = Peer.trade_filter channels ).length
+      SyncQueue.byIRAC[irac] = {}
+      peer.hardcore ' PUBLISHING '.bold.inverse, channels
+      Peer.trade peer, null, channels, ->
+        peer.hardcore  ' PUBLISHED '.bold.inverse, channels
+    send irac, channels for irac, channels of SyncQueue.byIRAC
+    done null
 
 ###
   CHANNEL-SETUP
@@ -168,6 +199,7 @@ $command peer: Peer.requestAuth = (address)->
 $command irac_peer: $group '$public', (ack)->
   { irac, root, onion, ia } = peer = $$.peer
   accept = (peer,ack)->
+    peer = new Peer.Remote remote:peer.cert, cert:ack
     peer.log ' PEERED-WITH '.green.bold.inverse
     setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
     peer.groups '$peer'
@@ -207,12 +239,13 @@ Peer.sync = (peer,callback)-> want = offer = null; $async.series [
     Request peer, [
       'irac_sync', opts: Peer.opts peer
     ], (error,msg)->
-      unless error
-        peer.hardcore  'SYNC-REPLY', msg
+      unless error or msg.error
+        peer.hardcore  ' SYNC-REPLY '.white.inverse, msg
         Peer.readOpts peer, msg
         offer = Channel.offer   peer, peer.remoteSync
         want  = Channel.compare peer, msg
-        peer.hardcore  'SYNC-WANT', want if Object.keys(want).length > 0
+        peer.hardcore ' SYNC-WANT '.white.inverse, want if Object.keys(want).length > 0
+      else peer.error ' SYNC-ERROR '.red.bold.inverse, error || msg.error
       c error
   (c)-> Peer.trade peer, want, offer, c
   -> do callback if callback ]
@@ -232,28 +265,6 @@ Channel.compare = (peer,channels)->
     else channels[name] = list.filter( (i)-> not channel.byHash[i]? )
     delete channels[name] if channels[name].length is 0
   channels
-
-class SyncQueue
-  @byIRAC: {}
-  @distribute = (source,channel,items)->
-    return unless channel?
-    source = $config.hostid unless source?
-    queue  = SyncQueue.byIRAC
-    hashed = items.map Channel.hash
-    connected = Request.connected
-    for irac, peer of connected when irac isnt source.irac or irac is $config.hostid.irac
-      q = queue[irac] = queue[irac] || {}
-      q[channel] = ( q[channel] = [] ).concat if peer.direct or channel[0] is '@' then items else hashed
-    @publish()
-  @publish: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
-    for irac, channels of SyncQueue.byIRAC
-      continue unless peer = PEER[irac]
-      continue unless 0 < Object.keys( channels = Peer.trade_filter channels ).length
-      peer.hardcore  'IRAC-PUSHING', channels
-      Peer.trade peer, null, channels, ->
-        peer.hardcore  'IRAC-PUSHED', channels
-      SyncQueue.byIRAC[irac] = {}
-    done null
 
 ###
   TRADE

@@ -89,8 +89,7 @@ Request.Agent = (opts) ->
   @protocol = 'https:'
   @createConnection = (opts) ->
     host = opts.host
-    _error = (stage)-> (error)->
-      console.hardcore 'SOCKSJS'.red.inverse, 'error:' + stage, error
+    _error = (stage)-> (error)-> console.hardcore ' SOCKSJS '.red.bold.inverse, opts.host, 'error:' + stage, error
     remote = ssl:yes, ca:opts.ca, cert:opts.cert, key:opts.key, host:opts.host, port: opts.port
     socks  = host:"127.0.0.1", port:$config.tor.port, localAddress: '127.0.0.1'
     socket = new socksjs remote, socks
@@ -140,8 +139,9 @@ Request.static = (peer,args,callback) ->
   opts.json = true
   # console.hardcore 'REQUEST'.green.inverse, peer, args[0]
   do req = -> $request( opts, (e)-> callback.apply null, arguments unless e ).on 'error', (msg)->
-    return Request.retry 10000, req if msg      is 'SOCKS: Host unreachable'
-    return Request.retry 10000, req if msg      is 'SOCKS: TTL expired'
+    return Request.retry 10000, req if msg is 'SOCKS: Host unreachable'
+    return Request.retry 10000, req if msg is 'SOCKS: TTL expired'
+    return Request.retry 60000, req if msg.match /^SOCKS/
     return Request.retry 5000,  req if msg.code is 'ECONNREFUSED'
     if msg.code is 'ENOTFOUND' and peer.address
       delete peer.address
@@ -164,10 +164,7 @@ Request.connect = (peer) -> do req = ->
   socket.on 'open', ->
     socket.peer = Peer.fromSocket socket._socket.outSocket || socket._socket
     socket.removeListener 'error', connect_error
-    if ( s = Request.connected[irac] ) and s isnt socket
-      peer.debug  ' WSC-DOUBLE '.red.bold.inverse
-      socket.close();
-    else Request.acceptSocket socket if socket.peer.irac is peer.irac
+    Request.acceptSocket socket if socket.peer.irac is peer.irac
     null
   socket.on 'error', connect_error = (error)->
     return                          if Request.connected[irac]
@@ -187,31 +184,45 @@ Request.connect = (peer) -> do req = ->
 ERROR = -1; REQUEST = 0; RESPONSE = 1
 
 Request.acceptSocket = (socket)->
-  { peer } = socket; ( console.error ' REQUEST-NO-PEER '.red.bold.inverse, peer;  return false ) unless peer?
-  { irac } = peer;   ( console.error Peer.format(peer), ' REQUEST-NO-IRAC '.red.bold.inverse;  return false ) unless peer.irac?
-  peer.hardcore  ' WS-ACCEPT '.green.bold.inverse
+  unregister = ->
+    delete Request.connecting[irac] if socket is Request.connecting[irac]
+    delete Request.connected[irac]  if socket is Request.connected[irac]
+  close = (error)->
+    peer.debug  ' WS-CLOSE '.blue.bold.inverse, error
+    peer.lastSeen = Date.now()
+    do unregister
+    Channel.byName.$peer.pull peer, peer
+    return if irac is $config.hostid.irac
+    Request.connect peer
+    null
+  fail = (message,data)->
+    socket.close(); do unregister
+    console.error Peer.format(peer||{}), message.red.bold.inverse, data; false
+  return fail ' REQUEST-NO-PEER ' unless ( peer = socket.peer )?
+  return fail ' REQUEST-NO-IRAC ' unless ( irac = peer.irac )?
+  if ( s = Request.connected[irac] ) and s isnt socket
+    return fail ' WSC-DOUBLE '
+  peer.hardcore ' WS-ACCEPT '.green.bold.inverse
 
   delete Request.connecting[irac] if Request.connecting[irac] is socket
-  Request.connected[irac = peer.irac] = socket
+  Request.connected[peer.irac] = socket
   peer.lastSeen = Date.now()
-  Channel.byName.$peer.push peer
-
+  Channel.byName.$peer.push peer, peer
   _send = socket.send.bind socket
-  socket.send = ->
-    try _send( $cbor.encode(arguments[0],no,yes,no), binary:on, mask:off )
+
+  socket.send = (data)->
+    try _send $cbor.encode(data,no,yes,no), binary:on, mask:off
     catch error
-      console.error Peer.format(peer), ' WS-SEND_ERROR ', console.error
       socket.emit 'close', error
+      fail ' WS-SEND-ERROR ', error
 
   socket.fail = (error,data)->
-    console.error Peer.format(peer), error, $util.inspect data
+    peer.error error, $util.inspect data
     socket.send [ -1, -1, [ error + "\n" + data ] ]
 
   socket.on "message", (m)->
-    # try m = JSON.parse m
-    # catch e then return console.error Peer.format(peer), ' WS-INVALID-JSON '.red.bold.inverse, $util.inspect m
     try m = $cbor.decode m
-    catch e then return console.error Peer.format(peer), ' WS-INVALID-BSON '.red.bold.inverse, $util.inspect m
+    catch e then return peer.error ' WS-INVALID-BSON '.red.bold.inverse, $util.inspect m
     # peer.hardcore  'WS-MESSAGE', $util.inspect m
 
     return socket.fail Peer.format(peer), ' WS-NOT-AN-ARRAY '.red.bold.inverse, m unless Array.isArray m
@@ -233,24 +244,16 @@ Request.acceptSocket = (socket)->
         break
 
     else if msgType is ERROR
-      console.error Peer.format(peer), ' WS-REMOTE-ERROR '.red.bold.inverse, msg.join '\n  '
+      peer.error ' WS-REMOTE-ERROR '.red.bold.inverse, msg.join '\n  '
 
-    else console.error Peer.format(peer), ' WS-ILLEGAL '.red.bold.inverse, msgType, uid, msg
+    else peer.error ' WS-ILLEGAL '.red.bold.inverse, msgType, uid, msg
     null
 
   socket.on 'error', (error)->
-    console.error Peer.format(peer), ' WS-ERROR '.red.bold.inverse, error
+    peer.error ' WS-ERROR '.red.bold.inverse, error
     null
 
-  socket.on 'close', (error)->
-    peer.debug  ' WS-CLOSE '.blue.bold.inverse, error
-    delete Request.connecting[irac] if socket is Request.connecting[irac]
-    delete Request.connected[irac]  if socket is Request.connected[irac]
-    peer.lastSeen = Date.now()
-    Channel.byName.$peer.pull peer
-    return if irac is $config.hostid.irac
-    Request.connect peer
-    null
+  socket.on 'close', close
 
   Request.flush peer
   null

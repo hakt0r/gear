@@ -32,7 +32,7 @@ setImmediate ->
   do $require.Module.byName.auth.resolve
 
 $app.on 'daemon', ->
-  console.log ' IRAC '.blue.bold.inverse, Peer.format($config.hostid)
+  console.log Peer.format($auth), '  I R A C  '.blue.bold.inverse, ( unless $auth.caDisabled then ' $ca ' else ' $host ' ).green.bold.inverse
   for i,p of $config.peers when i isnt $config.hostid.irac
     delete $config.peers[i]
     new Peer.Remote p
@@ -70,7 +70,7 @@ $static class Peer
     l.list.push l[@irac] = @
     return
 
-Peer::hardcore = Peer::verbose = Peer::debug = Peer::log = (args...)->
+Peer::error = Peer::hardcore = Peer::verbose = Peer::debug = Peer::log = (args...)->
   console.log.apply console, [Peer.format(@)].concat args
 
 Object.defineProperty Peer::, 'auth', get:->
@@ -80,11 +80,12 @@ class Peer.Shadow extends Peer
   shadow:true
   group:['$public']
   constructor:(opts)->
+    return false unless opts.irac
     return peer if ( peer = PEER[opts.irac] )?
+    console.log Peer.format(opts), ' SHADOW '.white.bold.inverse
     Object.assign @, opts
-    return false unless @irac
-    Request.static @, ['irac_peer',$config.hostid.cachain], $nullfn
     PEER[@irac] = @
+    Request.static @, ['irac_peer'], $nullfn
   toJSON:-> false
   toBSON:-> false
 
@@ -93,15 +94,13 @@ class Peer.Remote extends Peer
     cert = ( settings = cert ).remote if cert and cert.remote
     direction = if cert.inbound then 'in' else 'out'
     @[k] = v for k,v of settings when v? if settings
-    unless cert? and ( cert.raw or cert.substr )
-      console.error '  PEER WITHOUT CERTIFICATE '.red.bold.inverse
-      return false
-    if false is @parseCert cert
+    unless cert? and ( cert.raw or cert.substr ) and false isnt @parseCert cert
       console.error '  PEER WITHOUT IRAC-CERTIFICATE '.red.bold.inverse, cert
       return false
-    if ( peer = PEER[@irac] )?
+    peer_exists = ( peer = PEER[@irac] )? and not peer.shadow
+    if true is peer_exists and true is cert.authorized
       peer.onion = @onion if @onion
-      peer.log '  EXISTING-PEER '.red.bold.inverse, @cachain?
+      peer.log '  EXISTING-PEER '.green.bold.inverse, @cachain?
       return peer
     if cert.authorized # XXX and not @group
       @log  '  AUTO-PEER '.red.bold.inverse, @irac
@@ -125,7 +124,6 @@ class Peer.Remote extends Peer
       @ra = $irac $pki.certificateFromPem(@cachain[0]).publicKey
       @ia = $irac $pki.certificateFromPem(@cachain[1]).publicKey
     return false unless @irac? and @ia? and @ra?
-    @log  '  PEER '.white.bold.inverse, @cachain?, PEER[@irac]?
 
 Peer.fromSocket = (socket)->
   cert = socket.getPeerCertificate yes
@@ -136,7 +134,7 @@ Peer.fromSocket = (socket)->
     $pki.certificateToPem $pki.certificateFromAsn1 $forge.asn1.fromDer $forge.util.createBuffer cert.issuerCertificate.issuerCertificate.raw, 'raw'
     $pki.certificateToPem $pki.certificateFromAsn1 $forge.asn1.fromDer $forge.util.createBuffer cert.issuerCertificate.raw, 'raw' ]
   peer = new Peer.Remote cert, opts
-  peer.log  '  NETWORK-PEER '.red.bold.inverse, cert.issuerCertificate?, cert.inbound
+  # peer.log  '  NETWORK-PEER '.red.bold.inverse, cert.issuerCertificate?, cert.inbound
   peer
 
 class Peer.CA extends Peer
@@ -153,6 +151,7 @@ class Peer.CA extends Peer
       $pki.certificateToPem @ca
       $pki.certificateToPem @intermediate_ca ]
     Object.assign @, do @setupKeys
+    Peer.byIRAC[@irac] = @
     do @installKeys
     do @register
     Object.freeze(@group)
@@ -164,11 +163,11 @@ Peer.byCA = {}
 Peer.format = (peer)->
   return ' NULL '.red.bold.inverse unless peer
   o = []
-  o = o.concat ['[',peer.name.substr(0,6).green.bold,']'] if peer.name
+  o.push ( peer.onion || 'XX' ).substr(0,2).white.bold
   o.push ( peer.irac  || 'XX' ).substr(0,2).yellow.bold
   o.push ( peer.ia    || 'XX' ).substr(0,2).blue.bold
   o.push ( peer.ra    || 'XX' ).substr(0,2).green.bold
-  o.push ( peer.onion || 'XX' ).substr(0,2).white.bold
+  o = o.concat ['[',peer.name.substr(0,6).green.bold,']'] if peer.name
   o = o.join ''
   if peer.group
     o += '[' + ACL.highest(peer.group).white.bold + ']'
@@ -260,7 +259,6 @@ Peer.CA::authorize = (peer, group='$peer')->
         { type: 2, value: $pki.pemCertificateToPemURL peer.cachain[0], 'irac_ca' }
         { type: 2, value: $pki.pemCertificateToPemURL peer.cachain[1], 'irac_ia' }
       ] } ]
-  console.log cert
   cert.sign @intermediate_key.privateKey, $forge.md.sha256.create()
   do $app.sync # save serial
   $pki.certificateToPem cert
