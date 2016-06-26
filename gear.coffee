@@ -690,6 +690,11 @@ $app.init.corelib.config = ->
     CLB           CLB     CLB   CLB     CLB   CLB           CLB               CLB       CLB     CLB
       * CLB CLB     * CLB *     CLB     CLB   CLB CLB CLB   CLB CLB CLB   CLB CLB CLB   CLB CL###
 
+### process enhancements ###
+process.cpus = (
+  try $fs.readFileSync('/proc/cpuinfo','utf8').match(/processor/g).length
+  catch e then 1 )
+
 ### $util enhancements ###
 $util.print = -> process.stdout.write arguments[0]
 $util.debuglog = $util.debuglog || -> ->
@@ -698,20 +703,21 @@ $util.debuglog = $util.debuglog || -> ->
 Boolean.default = (val,def)-> if val then val isnt 'false' else def
 
 ### Array enhancements ###
+Array::trim =         -> return ( @filter (i)-> i? and i isnt false ) || []
+Array::pushOnce = (v) -> @push v if -1 is @indexOf v
 Array.last    =   (a) -> a[a.length-1]
 Array.remove  = (a,v) -> a.splice a.indexOf(v), 1
 Array.random  =   (a) -> a[Math.round Math.random()*(a.length-1)]
 Array.commons = (a,b) -> a.filter (i)-> -1 isnt b.indexOf i
 Array.slice   = (a,c) -> Array::slice.call a||[], c
 Array.unique  =   (a) -> u={}; a.filter (i)-> return u[i] = on unless u[i]; no
-Array::trim   =       -> return ( @filter (i)-> i? and i isnt false ) || []
-
-### process enhancements ###
-process.cpus = (
-  try $fs.readFileSync('/proc/cpuinfo','utf8').match(/processor/g).length
-  catch e then 1 )
+Array.oneSharedItem = (a,b)->
+  return true for v in a when -1 isnt b.indexOf v
+  return false
 
 ### Object enhancements ###
+Object.keyCount = (o)-> Object.keys(o).length
+
 Object.resolve = (o,path)->
   ( path = o; o = global ) unless path?
   return o if not path or path is ''
@@ -726,6 +732,13 @@ Object.unroll = (obj, handle)->
   while cue.length > 0
     for k,v of o = do cue.shift
       handle v, push, typeof v is 'object' and not Array.isArray v
+  null
+
+Object.trim = (map)->
+  for key,val of map
+    delete map[key] if Array.isArray(val)  and val.length is 0
+    delete map[key] if typeof val is 'object' and Object.keys(val).length is 0
+  map
 
 ### $pipe tools ###
 $static $pipe: catchErrors: (p)->

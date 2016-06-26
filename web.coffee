@@ -61,9 +61,7 @@ $app.on 'daemon', ->
   $web.https.on 'request', (req,res)->
     req.client.inbound = yes
     if false is req.peer = res.peer = Peer.fromSocket req.client
-      console.error 'REJECT', Peer.format(req.peer)
       return res.end ''
-    console.hardcore 'ACCEPT', Peer.format(req.peer)
     return $web.apply @, arguments
   $web.use do require('compression') unless $config.web.disableCompression
   $web.use do require('body-parser').json

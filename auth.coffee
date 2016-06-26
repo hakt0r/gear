@@ -100,7 +100,7 @@ class Peer.Remote extends Peer
     peer_exists = ( peer = PEER[@irac] )? and not peer.shadow
     if true is peer_exists and true is cert.authorized
       peer.onion = @onion if @onion
-      peer.log '  EXISTING-PEER '.green.bold.inverse, @cachain?
+      # peer.log '  EXISTING-PEER '.green.bold.inverse, @cachain?
       return peer
     if cert.authorized # XXX and not @group
       @log  '  AUTO-PEER '.red.bold.inverse, @irac
@@ -265,17 +265,17 @@ Peer.CA::authorize = (peer, group='$peer')->
 
 Peer.CA::signMessage = (message,key)->
   key = ( key || @key ).privateKey
-  message.from = $config.hostid.irac
-  message.date = Date.now()
+  message.irac = $config.hostid.irac unless message.irac
+  message.date = Date.now()          unless message.date
   md = $forge.md.sha256.create().update (JSON.stringify message), 'utf8'
   message.sign = (new Buffer key.sign(md),'binary').toString('base64')
   message
 
 Peer.CA::verifyMessage = (message,key)->
-  key = @key.publicKey if message.from is $config.hostid.irac
+  key = @key.publicKey if message.irac is $config.hostid.irac
   unless key
-    unless ( peer = PEER[message.from] ) and ( cert = peer.remote )
-      peer = new Peer.Shadow irac:message.from
+    unless ( peer = PEER[message.irac] ) and ( cert = peer.remote )
+      peer = new Peer.Shadow irac:message.irac
       ( peer.toVerify || peer.toVerify = [] ).push = message
       return false
     else key = $pki.certificateFromPem(cert).publicKey

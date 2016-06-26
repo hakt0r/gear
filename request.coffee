@@ -191,7 +191,7 @@ Request.acceptSocket = (socket)->
     peer.debug  ' WS-CLOSE '.blue.bold.inverse, error
     peer.lastSeen = Date.now()
     do unregister
-    Channel.byName.$peer.pull peer, peer
+    Message.peerLost peer
     return if irac is $config.hostid.irac
     Request.connect peer
     null
@@ -207,7 +207,7 @@ Request.acceptSocket = (socket)->
   delete Request.connecting[irac] if Request.connecting[irac] is socket
   Request.connected[peer.irac] = socket
   peer.lastSeen = Date.now()
-  Channel.byName.$peer.push peer, peer
+  Message.peer peer
   _send = socket.send.bind socket
 
   socket.send = (data)->
