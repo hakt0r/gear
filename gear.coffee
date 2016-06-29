@@ -528,13 +528,12 @@ setImmediate $app.init.bootstrap = ->
 $app.init.deps = -> # load deps, or install via npm
   do $app.init.corelib.resolveCache
   console.hardcore 'INIT-DEPS'
-  deps = ['underscore','async','coffee-script','mkdirp','touch','carrier','request','colors','bson']
-  load = ['underscore','async','coffee-script','mkdirp','touch','carrier','request']
+  deps = ['underscore','async','coffee-script','mkdirp','touch','carrier','request','cbor','colors']
+  load = ['underscore','async','coffee-script','mkdirp','touch','carrier','request','cbor']
   g = global; f = $fs
   try
     require $path.join $path.node_modules, 'colors'
-    g.$bson = new ( require $path.join $path.node_modules, 'bson' ).BSONNative.BSON()
-    [ g._, async, g.$coffee, f.mkdirp, f.touch, g.$carrier, g.$request ] = load.map (i)->
+    [ g._, async, g.$coffee, f.mkdirp, f.touch, g.$carrier, g.$request, g.$cbor ] = load.map (i)->
       require $path.join $path.node_modules, i
     $async[k] = v for k,v of async; g.$async = $async
     console.hardcore 'INIT-DEPS-DONE', Object.keys($async).length
@@ -560,8 +559,7 @@ $app.init.corelib = ->
       * CAC CAC   CAC     CAC     * CAC CAC   CAC     CAC   CAC CAC ###
 
 $app.init.corelib.resolveCache = ->
-  Module = require 'module'
-  return if Module.__resolveFilename
+  return if ( Module = require 'module' ).__resolveFilename
   console.debug 'resolveCache'
   nodeModule = {}; timer = null
   try cache = JSON.parse $fs.readFileSync( fpath = $path.join $path.cache, 'resolve.json' ) catch e then cache = {}
@@ -570,11 +568,12 @@ $app.init.corelib.resolveCache = ->
   Module._resolveFilename = (r,s) ->
    return r if nodeModule[r]
    return val if ( val = cache[cpath = if r.match /^\./ then s.filename+"///"+r else r] )?
-   clearTimeout timer; timer = setTimeout ( -> $fs.writeFile fpath, JSON.stringify cache ), 500
-   return cache[cpath] = Module.__resolveFilename.call this,r,s
+   do $cache.write; return cache[cpath] = Module.__resolveFilename.call this,r,s
   Module._resolveFilename[k] = o for k,o of Module.__resolveFilename
+  cache.write = -> clearTimeout timer; timer = setTimeout ( ->
+    $fs.writeFile fpath, JSON.stringify cache ), 500
   cache.get = (key)-> cache[key]
-  cache.add = (key,value)-> cache[key] = value
+  cache.add = (key,value)-> $cache.write cache[key] = value
   $static $cache: cache
 
 $app.init.corelib.cache = ->
@@ -600,75 +599,44 @@ $app.init.corelib.cache = ->
     CFG           CFG     CFG   CFG   * CFG   CFG               CFG       CFG     CFG
       * CFG CFG     * CFG *     CFG     CFG   CFG           CFG CFG CFG     * C ###
 
+$static Storage: class Storage
+  constructor: (opts)->
+    Object.assign $evented(@), opts
+    @default = @default || []
+    @suffix  = @suffix  || '.cbor'
+    @basedir = @basedir || $path.configDir
+    @path    = @path    || $path.join @basedir, @name + @suffix
+    @temp    = @temp    || @path + '.tmp'
+    @[k] = ( @[k] || (data) => data ) for k in ['revive','firstRead','filter','preWrite']
+    ( @decode  = @decode  || new $cbor.Decoder() ).on 'data', @revive || (data)-> data
+    $async.series [ @setup, @read ], ( @firstRead || $nullfn ).bind @
+    $app.on 'exit', @writeSync = =>
+      console.log ' ERMERGENCY-WRITE '.red.bold.inverse, @name
+      $fs.writeSync @temp, @preWrite(@data).map(@filter).map($cbor.encode)
+      $fs.renameSync @temp, @path
+  revive:(data)=> @data.push data
+  setup:(done=$nullfn)=> $fs.exists @basedir, (exists)=> return do done unless exists; $fs.mkdirp @basedir, done
+  read:(done=$nullfn)=> $fs.exists @path, (exists)=>
+    return done null, @data = @default unless exists
+    $fs.createReadStream(@path).pipe(@decode).on('end',done).on('error',=> done null, @data = @default )
+  write:(done=$nullfn)->
+    pos = 0; @encode = new $cbor.Encoder(); data = @preWrite @data
+    @encode.pipe @out = $fs.createWriteStream @temp
+    console.log ' STORING '.inverse, data.length, (@name+'s').inverse
+    @out.on 'drain', write = =>
+      data.slice(pos,1000).map(@filter).map((i)=> console.log i;i).map(@encode.write.bind @encode)
+      ( $fs.rename @temp, @path, => @encode.end(); do done ) if ( pos += 1000 > data.length )
+    do write
+
 $app.init.corelib.config = ->
-  $static Storage: class Storage
-    path:        null
-    data:        null
-    lastSave:    null
-    lastTimeout: null
-    suffix:    '.bson'
-    basedir:    $path.configDir
-
-    constructor: (key,opts)->
-      if typeof key is 'object' and not opts
-        opts = key; key = opts.name
-      Object.assign @, opts if opts and typeof opts is 'object'
-      @path    = $path.join @basedir, key + @suffix
-      @default = @default || []
-      $evented @
-      @[slot] = @[slot].bind @ for slot in ['write','writeSync']
-      @write = $async.deadline 100, @write
-      @onread = $nullfn unless @onread
-      $app.on 'exit', @writeSync
-      do @read
-
-    read:->
-      $async.series [
-        (c)=> $fs.exists @basedir, (exists)=>
-          return do c if exists
-          console.hardcore 'CONFIG-MKDIR'
-          $fs.mkdirp @basedir, c
-        (c)=> $fs.exists @path, (exists)=>
-          return do c unless exists
-          console.hardcore 'CONFIG-READING', @path
-          $fs.readFile @path, (error,data)=>
-            process.exit 1, console.error 'STORAGE-READ', @path, error if error
-            try @data = $bson.deserialize data; do c
-            catch error then process.exit 1, console.error 'STORAGE-PARSE-ERROR', @path, error, error.stack
-        (c)=>
-          console.hardcore 'CONFIG-DONE', @path
-          @data = @data || @default; @onread @data; @emit 'read', @data ]
-      null
-
-    stringify: (data)-> $bson.serialize data
-    write: (cue,done)->
-      return console.error 'CONFIG-NO-DATA', @path unless @data
-      console.hardcore 'CONFIG-WRITE', @path
-      data = if @_filter then @_filter @data else @data
-      data = data.map( (o)-> c = {}; c[k] = v for k,v of o; delete c.uid; c ) if data.map
-      temp = @path + '.tmp'
-      @emit "write", d = @stringify data
-      $async.series [
-        (c)=> $fs.writeFile temp, d, c
-        (c)=> $fs.rename temp, @path, c
-      ], =>
-        console.hardcore 'CONFIG-WRITE-DONE', @path
-        done null
-      null
-    writeSync:->
-      data = if @_filter then @_filter @data else @data
-      data = data.map( (o)-> c = {}; c[k] = v for k,v of o; delete c.uid; c ) if data.map
-      $fs.writeFileSync @path + '.tmp', @stringify data
-      $fs.renameSync    @path + '.tmp', @path
-
-  $app.config = new Storage
+  $app.config = new Storage {
+    default: global.$config = {}
     name: 'config'
-    default: {}
-    onread: (config)->
-      @onread = (config)-> global.$config = config
-      @onread config
-      do $app.init.main
-    sync: -> $app.config.write()
+    preWrite:-> return ( [k,v] for k,v of $config )
+    revive:(d)-> $config[d[0]] = d[1]
+    firstRead: (config)->
+      $app.on 'sync', -> $app.config.write()
+      $app.init.main @data = null }
 
   $app.sync = $async.deadline 100, (cue, done)->
     $app.emit 'sync', cue, defer = $async.defer ->
@@ -681,8 +649,6 @@ $app.init.corelib.config = ->
   $app.syncAdd    = $app.sync.bind null, 'add'
   $app.syncChange = $app.sync.bind null, 'change'
   $app.syncRemove = $app.sync.bind null, 'remove'
-
-  $app.on 'sync', $app.config.sync.bind $app.config
 
 ###   * CLB CLB     * CLB *     CLB CLB *     CLB CLB CLB   CLB           CLB CLB CLB   CLB CLB *
     CLB           CLB     CLB   CLB     CLB   CLB           CLB               CLB       CLB     CLB
@@ -704,9 +670,12 @@ Boolean.default = (val,def)-> if val then val isnt 'false' else def
 
 ### Array enhancements ###
 Array::trim =         -> return ( @filter (i)-> i? and i isnt false ) || []
+Array::last =         -> @[@length-1]
+Array::unique =       -> u={}; @filter (i)-> return u[i] = on unless u[i]; no
+Array::remove =   (v) -> @splice i, 1 if i = @indexOf v
 Array::pushOnce = (v) -> @push v if -1 is @indexOf v
 Array.last    =   (a) -> a[a.length-1]
-Array.remove  = (a,v) -> a.splice a.indexOf(v), 1
+Array.remove  = (a,v) -> a.splice i, 1 if i = a.indexOf v
 Array.random  =   (a) -> a[Math.round Math.random()*(a.length-1)]
 Array.commons = (a,b) -> a.filter (i)-> -1 isnt b.indexOf i
 Array.slice   = (a,c) -> Array::slice.call a||[], c
@@ -714,6 +683,21 @@ Array.unique  =   (a) -> u={}; a.filter (i)-> return u[i] = on unless u[i]; no
 Array.oneSharedItem = (a,b)->
   return true for v in a when -1 isnt b.indexOf v
   return false
+Array.blindPush = (o,a,e)->
+  list = o[a] || o[a] = []
+  list.push e if -1 is list.indexOf e
+Array.blindSortedPush = (o,a,e,key='date')->
+  return o[a] = [e] unless ( list = o[a] ) and list.length > 0
+  return            unless -1 is list.indexOf e
+  return list.unshift e if list[0][key] > e[key]
+  break for item, idx in list when item[key] > e[key]
+  list.splice idx, 0, e
+Array.blindConcat = (o,a,e)->
+  o[a] = ( o[a] || o[a] = [] ).concat e
+Array.destructiveRemove = (o,a,e)->
+  return unless list = o[a]
+  Array.remove list, e
+  delete o[a] if list.length is 0
 
 ### Object enhancements ###
 Object.keyCount = (o)-> Object.keys(o).length

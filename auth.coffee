@@ -69,6 +69,7 @@ $static class Peer
     l = Peer.byCA[@ra] = Peer.byCA[@ra] || list:[]
     l.list.push l[@irac] = @
     return
+  encodeCBOR:-> @auth
 
 Peer::error = Peer::hardcore = Peer::verbose = Peer::debug = Peer::log = (args...)->
   console.log.apply console, [Peer.format(@)].concat args
@@ -87,7 +88,7 @@ class Peer.Shadow extends Peer
     PEER[@irac] = @
     Request.static @, ['irac_peer'], $nullfn
   toJSON:-> false
-  toBSON:-> false
+  encodeCBOR:-> false
 
 class Peer.Remote extends Peer
   constructor:(cert,settings)->

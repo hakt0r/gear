@@ -21,6 +21,15 @@
 
 return unless $require -> @npm 'mime'; @mod 'auth'
 
+$app.on 'daemon', -> $app.messageStore = new Storage
+  name: 'message'
+  revive: (data)-> new Message data
+  preWrite:-> Message.byDate.slice()
+  filter:(i)-> date:i.date, hash:i.hash, raw:i.raw
+  firstRead:-> $app.on 'sync', (q,defer)->
+    console.log ' SYNC '.red.bold.inverse
+    $app.messageStore.write defer 'messages'
+
 fail = (msg,opts)-> console.error msg.red.bold.inverse, opts
 
 $static class Message
@@ -40,20 +49,28 @@ $static class Message
       return false
     @date = Date.now() unless @date
     Message.byHash[@hash] = @
-    Message.implicitSortedPush Message, 'byDate', @
-    Message.implicitSortedPush Message.byTag, t, @ for t in [@raw.type].concat @raw.tag
+    Array.blindSortedPush Message, 'byDate', @
+    Array.blindSortedPush Message.byTag, t, @ for t in [@raw.type].concat @raw.tag
     MessageSync.distribute @peer, [@]
     Message.getBlob @raw.hash, @peer if @raw.hash
     console.debug Peer.format(@peer), ' MESSAGE '.green.inverse, @raw
   destructor:->
-    Message.destructiveRemove Message, 'byDate', @
-    Message.destructiveRemove Message.byTag[t] for t in [@type].concat @raw.tag
+    Array.destructiveRemove Message, 'byDate', @
+    Array.destructiveRemove Message.byTag[t] for t in [@type].concat @raw.tag
     delete Message.byHash[@hash]
-  toCBOR:-> date:@date, hash:@hash, raw:@raw
+  encodeCBOR:-> date:@date, hash:@hash, raw:@raw
 
 ###
   MESSAGE-TYPES
 ###
+
+Message.getTags = (str)-> str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
+Message.stripTags = (body,tags=[])->
+  while tag = body.trim().match /^[#@$][a-zA-Z0-9_]+/
+    tags.push tag[0]
+    body = body.substr tag[0].length
+  return [body,tags]
+  str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
 
 Message.peer = (peer)-> new Message peer: peer, ttl:60000, raw: $auth.signMessage
   tag: ['$peer'], type: 'x-irac/peer', seen: irac: peer.irac, ia: peer.ia, ra: peer.ra, onion: peer.onion
@@ -62,10 +79,7 @@ Message.peerLost = (peer)-> new Message peer: peer, ttl:60000, raw: $auth.signMe
   tag: ['$peer'], type: 'x-irac/peer', lost: irac: peer.irac, ia: peer.ia, ra: peer.ra, onion: peer.onion
 
 Message.chat = (body)->
-  tags = []
-  while tag = body.trim().match /^[#@$][a-zA-Z0-9_]+/
-    tags.push tag[0]
-    body = body.substr tag[0].length
+  [ body, tags ] = Message.stripTags body
   tags = ['$status'] if tags.length is 0
   new Message raw: $auth.signMessage tag:tags, type:'text/utf8', irac:$auth.irac, body:body
 
@@ -94,28 +108,9 @@ Message.file = (path,tag...)->
   MESSAGE-UTILS
 ###
 
-Message.implicitPush = (o,a,e)->
-  list = o[a] || o[a] = []
-  list.push e if -1 is list.indexOf e
-
-Message.implicitConcat = (o,a,e)->
-  o[a] = ( o[a] || o[a] = [] ).concat e
-
-Message.implicitSortedPush = (o,a,e)->
-  return o[a] = [e] unless ( list = o[a] ) and list.length > 0
-  return            unless -1 is list.indexOf e
-  return list.unshift e if list[0].date > e.date
-  break for item, idx in list when item.date > e.date
-  list.splice idx, 0, e
-
-Message.destructiveRemove = (o,a,e)->
-  return unless list = o[a]
-  Array.remove list, e
-  delete o[a] if list.length is 0
-
 Message.dateSearch = (o,a,date)->
   return [] unless ( list = o[a] ) and list.length > 0
-  return [] if list[0].date < date
+  return [] if list[0].date <= date
   return list if Array.last(list).date > date
   return list.slice(0,idx) for i,idx in list when i.date > date
   return []
@@ -206,9 +201,10 @@ $static class MessageSync
     connected = Request.connected
     source = $config.hostid unless source?
     for irac, socket of connected when irac isnt source.irac or irac is $config.hostid.irac
-      Message.implicitConcat MessageSync.queue, irac, items.filter (i)-> MessageFilter socket.peer
+      Array.blindConcat MessageSync.queue, irac, items.filter (i)-> MessageFilter socket.peer
     do @trigger
   @trigger: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
+    $app.sync()
     console.debug ' MESSAGE-QUEUE '.white.bold.inverse
     send = (irac,list)->
       console.debug ' SEND '.white.bold.inverse, irac, list.length
@@ -239,36 +235,12 @@ $static MessageFilter: ( peer, sub = Peer.subscribe(peer) ) -> ( item )->
 
 MessageFilter.byType = {}
 MessageFilter.add = (type,callback)->
-  Message.implicitPush MessageFilter.byType, type, callback
+  Array.blindPush MessageFilter.byType, type, callback
 
 MessageFilter.add 'x-irac/peer', (peer,i)->
   return false unless peer? and i? and ACL.check peer, '$local', '$host', '$peer'
   return false if ( i.irac is peer.irac ) or ( i.irac is $config.hostid.irac )
   return true
-
-###
-  UTILS
-###
-
-$static class IRACStream
-  constructor:(to,opts)->
-    new Message @msg = $auth.signMessage Object.assign opts,
-      date:date=Date.now()
-      irac:$config.hostid.irac
-      body:'= Media Stream ='
-      hash:@hash=$sha1($config.hostid.ra + $config.hostid.irac + date)
-    IRACStream.byHash[@hash] = @
-    @path = $path.sharedHash @hash
-    console.debug ' STREAM '.white.bold.inverse, @hash, @path
-  end:(data)->
-    console.debug ' STREAM-END '.white.bold.inverse, @hash
-    @save.close()
-  write:(data)->
-    console.debug ' STREAM-BEGIN '.white.bold.inverse, @hash
-    @save = $fs.createWriteStream @path
-    @write = @save.write.bind @save
-    @write data
-  @byHash:{}
 
 ###
   API-COMMANDS
@@ -298,12 +270,15 @@ $command irac_sync: $group '$peer', (opts)->
   ( new MessageSync $$.peer, inbound:true ).query opts
 
 $command irac_get: $group '$peer', (msg)->
-  mime = require 'mime'
-  try file = $fs.realpathSync link = $path.sharedHash msg catch e then file = null
+  try
+    file = $fs.realpathSync link = $path.sharedHash msg
+    meta = $config.meta[msg] || require('mime').lookup file
+  catch e then file = null
   if $$.web
     { req, res, next } = $$.web; $$.pipe = on
     if file and $fs.existsSync link
-      console.debug ' REQ '.whiteBG.black.bold, req.url = req.url.replace /rpc\/irac_get\//, ''
+      req.url = '/' + msg
+      console.debug ' REQ '.whiteBG.black.bold, req.url, meta
       $web.static req, res, next
     else
       res.status 504
@@ -316,8 +291,6 @@ $command irac_get: $group '$peer', (msg)->
   COMMANDS
 ###
 
-$command sync: (irac)-> Peer.sync PEER[irac]; true
-
 $command peer: Peer.requestAuth = (address)->
   return 'ENOADDRESS' unless address
   Request.static name:address.split('.').shift(),address:address, [
@@ -326,13 +299,10 @@ $command peer: Peer.requestAuth = (address)->
     return console.error error if error
   'calling_' + address
 
-$command subscribe: (channel)->
-  $config.subscribe.pushOnce channel
-  do $app.sync; true
+$command sync: (irac)-> Peer.sync PEER[irac]; true
 
-$command unsubscribe: (channel)->
-  Array.remove $config.subscribe, channel
-  do $app.sync; true
+$command subscribe:   (tag)-> $config.subscribe.pushOnce tag;      do $app.sync; true
+$command unsubscribe: (tag)-> Array.remove $config.subscribe, tag; do $app.sync; true
 
 $command say: (message...)-> Message.chat message.join ' '
 
@@ -340,8 +310,9 @@ $command share: (channel,file)->
   return false unless $fs.existsSync file
   Message.file file
 
-$command rec: (to,opts)->
-  if s = new IRACStream to, opts then s.hash else false
+$command rec: (body,opts)->
+  [ opts.body, opts.tag ] = Message.stripTags body
+  if s = new IRACStream opts then s.hash else false
 
 $command chunk:(hash,id,data)-> if data
   console.debug ' STREAM-CHUNK '.white.bold.inverse, id, data.length
@@ -352,6 +323,29 @@ $command chunk:(hash,id,data)-> if data
 $command cut:(hash)->
   return false unless s = IRACStream.byHash[hash]
   s.end()
+
+$static class IRACStream
+  constructor:(opts={})->
+    return false unless opts.tag
+    @msg = new Message peer:$auth, raw: $auth.signMessage Object.assign opts,
+      tag:opts.tag
+      date:date=Date.now()
+      irac:$config.hostid.irac
+      body:opts.body||'= Media Stream ='
+      hash:@hash = $sha1 $config.hostid.ra + $config.hostid.irac + date + opts.tag.join ''
+    IRACStream.byHash[@hash] = @
+    @path = $path.sharedHash @hash
+    $config.meta[@hash] = @msg.raw
+    console.debug ' STREAM '.white.bold.inverse, @hash, @path
+  end:(data)->
+    console.debug ' STREAM-END '.white.bold.inverse, @hash
+    @save.close()
+  write:(data)->
+    console.debug ' STREAM-BEGIN '.white.bold.inverse, @hash
+    @save = $fs.createWriteStream @path
+    @write = @save.write.bind @save
+    @write data
+  @byHash:{}
 
 $command tags: -> Object.keys Message.byTag
 

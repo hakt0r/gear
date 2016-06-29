@@ -35,6 +35,8 @@ button{
   padding: 5px;
   min-height: 16px; }
 
+.offline { opacity: 0.7; }
+
 label.channel, label.date, label.from {
   font-size: 80%;
   font-weight:bold;
@@ -86,3 +88,42 @@ video.chat { max-width: 200px; }
   -ms-user-select: none;
   -o-user-select: none;
   user-select: none; }
+
+.menu {
+  display: block;
+  list-style-type: none;
+  border-radius: 5px;
+  margin-top: 2px;
+  background: #F3B11C;
+  padding: 5px;
+  min-height: 16px;
+  position: fixed;
+  top: 65px; }
+
+.menu .item {
+  font-family: sans-serif;
+}
+
+.message i.fa { min-width: 14px; text-align: center; }
+
+.message.prompt h1 { font-size: 2vmax; margin: 1vmax 1vmax;}
+
+.message.prompt {
+  position: fixed;
+  left: 10%;
+  right: 10%;
+  top: 20%; }
+
+.floating {
+  z-index: 100;
+  box-shadow: black 1px 1px 10px;}
+
+.message.prompt input {
+  width: 100%;
+  margin-bottom: 10px; }
+
+button.ok { float:right; clear:both }
+button.cancel { float:left; }
+
+*:focus { outline: none; border: red solid 1px; }
+input, textarea { background-color: #FFE69D }

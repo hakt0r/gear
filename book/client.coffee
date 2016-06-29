@@ -37,7 +37,34 @@ if $app? then return $app.on 'web:listening', ->
     res.setHeader('Content-Type','text/html')
     $fs.createReadStream($path.join($path.modules,'book/index.html')).pipe res
 
+  $web.bindLibrary '/montserrat.css', 'https://fonts.googleapis.com/css?family=Montserrat:400,700&type=woff2', 'text/css',
+    (err,req,body)->
+      urls = ( body = body.replace(/ttf/g,'woff2') ).match /http.*woff2/g
+      console.log urls
+      $web.bindLibrary u1='/montserrat.woff2', urls[0]
+      $web.bindLibrary u2='/montserrat.woff2', urls[1]
+      body.replace(urls[0],u1).replace(urls[1],u2)
 
+
+
+
+
+
+
+
+
+
+
+Array::trim =   -> return ( @filter (i)-> i? and i isnt false ) || []
+Array::unique = -> u={}; @filter (i)-> return u[i] = on unless u[i]; no
+
+window.fnv = (s) ->
+  h = 0; i = 0; s = s.toString()
+  while i < s.length
+    h ^= s.charCodeAt i
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    i++
+  return ( h >>> 0 ).toString 36
 
 
 
@@ -122,7 +149,7 @@ IRAC.updateList = (items)-> requestAnimationFrame =>
   do applyDate
 
 $ -> request ['ui_list'], (result)->
-  window.$me = new Peer result.$hostid; delete result.$hostid
+  window.$me = result.$hostid; window.$me = new Peer result.$hostid; delete result.$hostid
   IRAC.updateList result
   list = ( v.name for k,v of result.$tag )
   console.log 'get', list
@@ -156,17 +183,21 @@ window.Message = class Message
   @byCA: {}
   @byIRAC: {}
   @byTag: {}
+  @byUID: {}
   constructor:(opts)->
     Object.assign @, opts
-    Message.byCA[Peer.bySA[opts.irac].ra] = @
-    Message.byIRAC[opts.irac] = @
+    return m if m = Message.byUID[@sign]
+    @tag = @tag.filter (i)-> -1 is ['$peer'].indexOf i
+    Message.byUID[@sign] = @
+    Message.byCA[Peer.bySA[@irac].ra] = @
+    Message.implicitSortedPush Message.byIRAC, @irac, @ for t in @tag.concat ['$all']
     Message.implicitSortedPush Message.byTag, t, @ for t in @tag.concat ['$all']
-    View.update opts
+    View.update @
 
 Message.add = (item)->
-  return new Peer item if item.type is 'x-irac/peer'
+  requestAnimationFrame -> do View.render
+  return Peer.handle item if item.type is 'x-irac/peer'
   new Message item
-  do View.render
 
 Message.implicitSortedPush = (o,a,e)->
   return o[a] = [e] unless ( list = o[a] ) and list.length > 0
@@ -178,8 +209,8 @@ Message.implicitSortedPush = (o,a,e)->
 Message.default = (item)-> """
   <div class="message binary">
     <span class="meta">
-      <label class="tags">#{htmlentities item.tag.join ', '}</label>
-      <label class="from">#{item.irac.substr(0,5)}</label>
+      <label class="channel">#{Message.formatDestination item}</label>
+      <label class="from">#{Message.formatSource item}</label>
       <label class="type">#{htmlentities item.type}</label>
       <label class="date">#{htmlentities item.date}</label>
     </span>
@@ -193,25 +224,48 @@ htmlentities = (str) ->
 
 String::color = (color) -> '<span style="color:'+color+'">' + @ + '</span>'
 addcolor = (color)-> Object.defineProperty String::, color, get: -> @color color
-addcolor c for c in ['red','white','green','black','yellow','blue']
+addcolor c for c in ['red','white','green','black','yellow','blue','grey']
 Object.defineProperty String::, 'bold', get: -> '<b>' + @ + '</b>'
 
-Message.text = (item)->
-  if peer = Peer.byCA[item.irac]
-    name = Peer.format peer
-  else if peer = Peer.bySA[item.irac]
-    name = Peer.format peer
-  else name = htmlentities item.irac
-  to = item.tag.map (i)-> switch i[0]
-    when '@' then ( if sa = Peer.bySA[i.substr 1] then Peer.format sa else item.irac.substr(0,6) )
-    when '#' then htmlentities i
-    when '$' then htmlentities i
-    else 'ILLEGAL-TAG ' + htmlentities i
-  """
+Message.formatSource = (item)->
+  if peer = Peer.byCA[item.irac] then Peer.formatCA peer
+  else if peer = Peer.bySA[item.irac] then Peer.format peer
+  else htmlentities item.irac
+
+Message.formatDestination = (item)-> item.tag.map( (i)-> switch i[0]
+  when '@' then ( if sa = Peer.bySA[i.substr 1] then Peer.format sa else item.irac.substr(0,6) )
+  when '#' then htmlentities i
+  when '$' then htmlentities i
+  else 'ILLEGAL-TAG ' + htmlentities i ).join ', '
+
+Message.formatDestination = (item)-> item.tag.map Message.formatTag
+
+Message.formatTag = (tag)->
+  raw = tag.substr 1
+  console.log  tag, raw
+  switch tag[0]
+    when '@'
+      if      ( ca = Peer.byCA[raw] ) then Peer.formatCA ca[0]
+      else if ( sa = Peer.bySA[raw] ) then Peer.format sa
+      else '@' + raw.substr(0,6).red
+    when '#' then '#'.grey + raw.yellow
+    when '$' then '$'.grey + raw.white
+    else tag.red
+
+Message.tagToClass = (tag)-> 'byTag_' + tag.replace('$','_dollar_').replace('@','_at_').replace('#','_hash_')
+Message.getTags = (str)-> str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
+Message.stripTags = (body,tags=[])->
+  while tag = body.trim().match /^[#@$][a-zA-Z0-9_]+/
+    tags.push tag[0]
+    body = body.substr tag[0].length
+  return [body,tags]
+  str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
+
+Message.text = (item)-> """
   <div class="message chat">
     <span class="meta">
-      <label class="channel">#{to.join ', '}</label>
-      <label class="from">#{name}</label>
+      <label class="channel">#{Message.formatDestination item}</label>
+      <label class="from">#{Message.formatSource item}</label>
       <label class="date">#{item.date}</label>
     </span>
     <p class="body chat">#{htmlentities item.body}</p>
@@ -221,8 +275,8 @@ Message.text = (item)->
 Message.image = (item)-> """
   <div class="message chat image">
     <span class="meta">
-      <label class="channel">#{htmlentities item.tag.join ', '}</label>
-      <label class="from">#{item.irac.substr(0,5)}</label>
+      <label class="channel">#{Message.formatDestination item}</label>
+      <label class="from">#{Message.formatSource item}</label>
       <label class="date">#{htmlentities item.date}</label>
     </span>
     <img src="/rpc/irac_get/#{item.hash}">
@@ -234,8 +288,8 @@ Message.video = (item)->
   i = $ """
   <div class="message chat video">
     <span class="meta">
-      <label class="channel">#{htmlentities item.tag.join ', '}</label>
-      <label class="from">#{item.irac.substr(0,5)}</label>
+      <label class="channel">#{Message.formatDestination item}</label>
+      <label class="from">#{Message.formatSource item}</label>
       <label class="date">#{htmlentities item.date}</label>
     </span>
     <video preload="none" src="/rpc/irac_get/#{item.hash}"></video>
@@ -247,34 +301,34 @@ Message.video = (item)->
 Message.audio = (item)-> """
   <div class="message chat audio">
     <span class="meta">
-      <label class="channel">#{htmlentities item.tag.join ', '}</label>
-      <label class="from">#{item.irac.substr(0,5)}</label>
+      <label class="channel">#{Message.formatDestination item}</label>
+      <label class="from">#{Message.formatSource item}</label>
       <label class="date">#{htmlentities item.date}</label>
     </span>
     <audio controls preload="none" src="/rpc/irac_get/#{item.hash}"></audio>
     <p class="body chat">#{htmlentities item.body}</p>
   </div>"""
 
-Message.buddy = (id,name,date)-> """
-  <div class="message peer byIrac_#{htmlentities id}">
+Message.buddy = (item)-> """
+  <div class="message peer byIrac_#{item.ra}">
     <span class="meta">
-      <label class="from">#{htmlentities name}</label>
-      <label class="date">#{date}</label>
+      <label class="from">#{Peer.formatCA item}</label>
+      <label class="date">#{parseInt item.date}</label>
     </span>
-    <ul class="peers">
-    </ul>
   </div>"""
 
-Message.peer = (id,name)-> """
-  <div class="message peer byIrac_#{htmlentities id}">
+Message['x-irac'] = -> ''
+
+Message.peer = (item)-> """
+  <div class="message peer byIrac_#{htmlentities item.irac}">
     <span class="meta">
-      <label class="from">#{htmlentities name}</label>
+      <label class="from">#{Peer.format item}</label>
     </span>
   </div>
 """
 
-Message.channel = (name)-> """
-  <div class="message channel byMessageName_#{htmlentities name}">
+Message.tag = (name)-> """
+  <div class="message channel #{Message.tagToClass name}">
     <span class="meta">
       <label class="from">#{htmlentities name}</label>
     </span>
@@ -297,37 +351,58 @@ window.Peer = class Peer
     chat:(-> do View.onSend )
     ftp:->
   constructor: (opts)->
-    if sa = Peer.bySA[opts.irac]
-      sa.update opts
-      return sa
     @update opts
     Peer.bySA[opts.irac] = @
     # console.log @
   update:(opts)->
     Object.assign @, opts
     return console.log 'NO-IRAC', @, opts unless @irac
-    @name   = @name   || @irac.substr(0,6)
-    @caname = @caname || @ra.substr(0,6) if @caname or @ra
     @channelName = '@' + @ra
     @peerName = '@' + @irac
     ca = Peer.byCA[opts.ra] || Peer.byCA[opts.ra] = []
     ca.push @
     ca.name = @caname
-    unless ( c = $ '.message.peer.byIrac_' + @ra ).length > 0
-      $('#peer').prepend c = $ Message.buddy @ra, @caname, @date
+    unless ( c = $ '.byIrac_' + @ra ).length > 0
+      $('#peer')[if peer.ra is $me.ra then 'prepend' else 'append'] c = $ Message.buddy @
       $(c.find('.from')[0]).on 'click', => View.set @channelName, @caname
-    unless ( e = $ '.message.peer.byIrac_' + @irac ).length > 0
-      c.append e = $ Message.peer @irac, @name
-      e.on 'click', => View.set @peerName, @name
+    unless ( e = $ '.byIrac_' + @irac ).length > 0
+      c.find('> .meta').append e = $ Message.peer @
+      e.on 'click', => View.set @peerName, @name || @irac.substr(0,6)
+
+Peer.handle = (item)->
+  peer = item.seen || item.lost
+  if sa = Peer.bySA[peer.irac]
+    return if peer.lastUpdate > item.date
+    sa.update peer
+  else sa = new Peer peer
+  return unless ( c = $ '.message.peer.byIrac_' + sa.irac ).length > 0
+  if item.seen then c.removeClass 'offline'
+  else c.addClass 'offline'
+  lastUpdate = item.date
+  null
+
+Peer.lost = (peer)->
+  true
+
+Peer.formatCA = (peer)->
+  return [' ','<i class="fa fa-users"></i>'.blue,' ',(peer.caname || 'me')].join '' if peer.ra is $me.ra
+  if peer.caname then '<i class="fa fa-users"></i> ' + peer.caname
+  else
+    ( o = [] ).push ( peer.ia    || 'XX' ).substr(0,2).blue.bold
+    o.push ( peer.ra    || 'XX' ).substr(0,2).green.bold
+    o = o.join ''
 
 Peer.format = (peer)->
+  return Peer.formatCA peer if peer.irac is peer.ra
   return ' NULL '.red.bold.inverse unless peer
+  return [' ','<i class="fa fa-user"></i>'.blue,' ',(peer.name||'here')].join '' if peer.irac is $me.irac
+  return [' ','<i class="fa fa-user"></i>'.white,' ',peer.name].join '' if peer.name
   o = []
-  o.push ( peer.onion || 'XX' ).substr(0,2).white.bold
-  o.push ( peer.irac  || 'XX' ).substr(0,2).yellow.bold
+  o.push ( peer.onion || 'XX' ).substr(0,2).red.bold
+  o.push ( peer.irac  || 'XX' ).substr(0,2).red.bold
   o.push ( peer.ia    || 'XX' ).substr(0,2).blue.bold
   o.push ( peer.ra    || 'XX' ).substr(0,2).green.bold
-  o = o.concat ['[',peer.name.substr(0,6).green.bold,']'] if peer.name
+  # o = o.concat ['[',peer.name.substr(0,6).green.bold,']'] if peer.name
   o = o.join ''
   if peer.group
     o += '[' + ACL.highest(peer.group).white.bold + ']'
@@ -344,37 +419,42 @@ Peer.format = (peer)->
 
 
 
-class IRACView
-  constructor:->
-    @setting = '$all'
-  update:->
-    do View.render
-    return
-    Object.assign @, opts
-    if @name[0] is '@'
-      opts.list = opts.list || []
-      opts.list = opts.list.concat ( Message.$irac || {list:[]} ).list.filter ( (i)-> i.irac is @name ) unless @name is '@' + $me.irac
-      opts.list = opts.list.concat ( Message.$root || {list:[]} ).list.filter ( (i)-> i.irac is @name ) unless @name is '@' + $me.ra
-    @list = ( opts.list || [] ).concat ( @list || [] ).sort Message.sortNormal
-    Message.byName.all.list = Message.byName.all.list.concat(opts.list || []).sort Message.sortNormal
-    return @ if @name[0] is '$'
-    return @ if @name[0] is '@'
-    unless ( c = $ '.byMessageName_' + @name ).length > 0
-      $('#channel').append c = $ Message.channel @name
-      c.on 'click', View.set.bind Message, @name, @name
-    return @
-
-  render:-> # requestAnimationFrame =>
+window.View = class View
+  @setting: '$all'
+  @update:(opts)->
+    for tag in opts.tag when not ( c = $ '.' + Message.tagToClass tag ).length > 0
+      continue if tag[0] is '@'
+      $('#channel').append c = $ Message.tag tag
+      c.on 'click', View.set.bind View, tag, tag
+  @render:->
+    return if @tick; @tick = true
+    requestAnimationFrame @realRender
+  @realRender:=>
     $('#feed').html ''
-    for item in list = Message.byTag[@setting] || []
+    list = Message.byTag[@setting] || []
+    if @setting[0] is '@'
+      if @setting is '@' + $me.irac
+        list = list.concat(Message.byIRAC[$me.irac]||[]).sort View.sortNormal
+      else list = list.concat(Message.byIRAC[@setting.substr 1]||[]).sort View.sortNormal
+    for item in list
       t = if item.type then item.type.split('/')[0] else 'default'
       $('#feed').prepend i = ( Message[t] || Message.default )(item,@setting)
+    $("#curchannel").html(@setname||@setting)
+    $("#actions").html('').append """
+      <i message-type="chat"  class="fa fa-envelope"></i>
+      <i message-type="achat" class="fa fa-microphone"></i>
+      <!--i message-type="vchat" class="fa fa-video-camera"></i-->
+      <i message-type="ftp"   class="fa fa-file"></i>
+      <i message-type="settings"   class="fa fa-cog"></i> """
+    $('#actions .fa').each (k,e)=>
+      e = $ e;
+      e.off()
+      e.on 'click', Peer.message[e.attr('message-type')].bind null, @setting, true
     do applyDate
-    null
-
-  set:(setting,@setname,prompt,@callback)->
+    @tick = false
+  @set:(setting,@setname,prompt,@callback)->
     @setting = setting
-    $('#send').html if prompt then prompt else if @setting is 'all' then 'Publish Status' else 'Send to #' + @setting
+    $('#send').html if prompt then prompt else if @setting is '$all' then 'Publish Status' else 'Send to #' + @setting
     @onSend = =>
       unless '' is v = $("#input").val().trim()
         if v[0] is '/'  then request cmd = v.substr(1).split /[ \t]+/
@@ -382,25 +462,50 @@ class IRACView
         else request ['say',( if @setting is '$all' then '$status' else @setting ), v]
       $("#input").val('')
     View.render()
-    $("#curchannel").html(@setname||@setting)
-    $("#actions").html('').append """
-      <i message-type="chat"  class="fa fa-envelope"></i>
-      <i message-type="achat" class="fa fa-microphone"></i>
-      <!--i message-type="vchat" class="fa fa-video-camera"></i-->
-      <i message-type="ftp"   class="fa fa-file"></i> """
-    $('#actions .fa').each (k,e)->
-      e = $ e; e.on 'click', Peer.message[e.attr('message-type')].bind null, @setting, true
     null
-  @sortNormal: (a,b)-> parseInt(b.date) - parseInt(a.date)
+  @sortNormal: (a,b)-> parseInt(a.date) - parseInt(b.date)
 
-Object.defineProperty IRACView::, 'setting',
-  get: -> @_setting
-  set: (filter)->
-    # debugger
-    return unless filter isnt @setting
-    @_setting = filter
+window.Prompt = class Prompt
+  @modal:no
+  close:-> @frame.remove(); Prompt.modal = no; $(document).off 'click', @close
 
-window.View = new IRACView
+class Prompt.Text extends Prompt
+  constructor:(opts)->
+    Prompt.modal.close() if Prompt.modal
+    Prompt.modal = @
+    Object.assign @, opts
+    $('body').append @frame = $ """
+      <div class="message prompt floating">
+        <h1>#{@query}</h1>
+        <input type="text"/>
+        <button class="ok">OK</button>
+        <button class="cancel">Cancel</button>
+      </div>
+    """
+    @frame.find('input').val(@default) if @default
+    @frame.find('input').focus()
+    @frame.find('.ok').click => ( @callback || -> )(@frame.find('input').val()); @close()
+    @frame.find('.cancel').click @close.bind @
+    return
+
+View.Proxy = (opts)->
+  View.Proxy.count = ( View.Proxy.count || 0 ) + 1
+  Object.assign @, opts
+  unless @box = View.Proxy.box
+    $('navigation').prepend @box = View.Proxy.box = $ """
+    <div class="message floating" id="proxies"></div>"""
+  @box.append @frame = $ """
+    <span class="proxy">
+      <i class="fa fa-#{@icon}"></i>
+      #{@text}
+    </span>
+  """
+  @remove = =>
+    @frame.remove()
+    @box.remove() if 0 is --View.Proxy.count
+  if @click then @frame.click @click
+  else @frame.click @remove
+  return @
 
 
 
@@ -410,38 +515,98 @@ window.View = new IRACView
 
 
 
-Peer.message.achat = (root)-> audio.add root
+
+
+
+
+
+
+Peer.message.settings = (key)->
+  switch key[0]
+    when '@'
+      if ( peer = Peer.byCA[hash = key.substr 1] ) then type = 'ca'
+      else if ( peer = Peer.bySA[hash] )           then type = 'peer'
+      else return false
+    when '$' then type = 'meta'
+    when '#' then type = 'channel'
+    else console.log 'unknown', key
+  menu = new ContextMenu type, hash || key
+
+window.ContextMenu = class ContextMenu
+  constructor:(@type,@key)->
+    ContextMenu.instance.frame.remove() if ContextMenu.instance
+    ContextMenu.instance = @
+    @item = []
+    $('body').append @frame = $ """<ul class="menu floating"></ul>"""
+    @addItem title:name, click:action, icon:Action.icon[name] for name, action of Action[@type]
+    setTimeout ( => $(document).click @close ), 100
+  close:=> @frame.remove(); ContextMenu.instance = no; $(document).off 'click', @close
+  addItem:(opts)->
+    @frame.append i = $ """
+      <li class="item"> <i class="fa fa-#{opts.icon || 'cog'}"></i> #{opts.title} </li>
+    """
+    i.on 'click', => @close(); ( opts.click || -> )( @key )
+
+window.Action =
+  icon:rename:'edit'
+  ca:rename:(item)-> new Prompt.Text
+    query:'Enter a new CA_NAME for ' + item
+    default: item[0].caname || ''
+    callback:(v)->
+      i.caname = v for i in Peer.byCA[item]
+      request ['set', '@'+item, 'caname', v]
+  peer:rename:(item)-> new Prompt.Text
+    query:'Enter a new NAME for ' + item
+    callback:(v)-> request ['set', '@'+item, 'name', Peer.bySA[item].name = v]
+
+
+
+
+
+
+
+Peer.message.achat = (root)->
+  audio.add root + " " + $("#input").val().trim()
+  $("#input").val('')
 
 window.audio = new class AudioChat
   init:(callback)->
+    @count = 0
     constraints = window.constraints = audio:on, video:off
     navigator.mediaDevices.getUserMedia constraints
      .then (@stream)=> do callback if callback
      .catch (e)-> console.error e
-  add: (to)->
-    timer = null
-    return @remove to if @[to] and @[to].stop
-    return @init @add.bind @, to unless @stream
-    request ['rec',to,type:'audio/opus'], (hash) =>
-      if ( e = $('.peer.byIrac_'+to) ).length isnt 0
-        e.find('.actions .fa-microphone').css('backgroundColor','red')
-      @[to] = rec = new MediaStreamRecorder @stream
-      rec.mimeType = 'audio/opus'
-      cid = 0 ; rec.ondataavailable = (blob) ->
+  add: (body)->
+    fnvhash = fnv body
+    return @remove fnvhash if @[fnvhash] and @[fnvhash].stop
+    return @init @add.bind @, body unless @stream
+    @count++
+    request ['rec',body,type:'audio/opus'], (@hash) =>
+      @proxy = new View.Proxy
+        icon: 'microphone'
+        text: Message.getTags(body).map(Message.formatTag).join ', '
+        click: => @remove fnvhash
+      $('#status .actions>i.fa-microphone').css('backgroundColor','red')
+      @[fnvhash] = rec = new MediaStreamRecorder @stream
+      timer = null; rec.mimeType = 'audio/opus'
+      cid = 0 ; rec.ondataavailable = (blob) =>
         reader = new FileReader
         reader.readAsArrayBuffer blob
-        reader.onloadend = ->
-          request ['chunk',hash,cid++,new Uint8Array reader.result]
-          clearTimeout timer
-          timer = setTimeout ( -> request ['cut',hash] ), 2000
+        console.log 'clear'
+        clearTimeout timer
+        timer = setTimeout ( =>
+          request ['cut',@hash] ), 2000
+        reader.onloadend = =>
+          request ['chunk',@hash,cid++,new Uint8Array reader.result]
+
         null
       rec.start 500
-    @[to] = 1
-  remove: (to)->
-    if ( e = $('.peer.byIrac_'+to) ).length isnt 0
-      e.find('.actions .fa-microphone').css('backgroundColor','#FFE69D')
-    try @[to].stop()
-    delete @[to]
+    @[fnvhash] = 1
+  remove: (fnvhash)->
+    @proxy.remove()
+    try @[fnvhash].stop()
+    delete @[fnvhash]
+    @stream.stop() if --@count is 0
 
 ###
 Peer.message.vchat = (root)-> new VChat "@" + root

@@ -27,22 +27,35 @@ $config.web = $config.web || port:2003
 
 $static $web: require('express')()
 
+$config.meta = $config.meta || {}
+
+$web.static = require('serve-static')($path.shared,setHeaders:(res,fullpath)->
+  res.setHeader 'X-Powered-By', 'irac/express/nodejs'
+  return unless meta = $config.meta[path = $path.basename fullpath]
+  console.log 'HEADERS'.whiteBG.black.bold, path, meta.type
+  res.setHeader 'Content-Type', meta.type || 'application/octet-stream'
+  res.setStatus 200 unless IRACStream.byHash[path] )
+
 $web.bindCoffee = (path,source)->
   $web.get path, (req,res)->
     res.setHeader('Content-Type','text/javascript')
     res.send $coffee.compile $fs.readFileSync( $path.join($path.modules,source), 'utf8')
   $web
 
-$web.bindLibrary = (path,source,mime='text/javascript')->
+$web.bindLibrary = (path,source,mime='text/javascript',filter)->
   $web.get path, (req,res)->
-    res.setHeader('Content-Type',mime)
-    res.send cache
+    res.setHeader('Content-Type',$cache.get 'mime_'+source)
+    res.send $cache.get source
   return if ( cache = $cache.get source ) and ( mime = $cache.get 'mime_' + source )
-  console.log cache = source + ' downloading...'
+  console.log ( cache = source + ' DOWNLOADING ' ).yellow.bold.inverse
   $request.get source, (error,req,body)->
+    body = filter.apply @, arguments if filter?
     return console.error "BIND-LIBRARY", source, error if error
     $cache.add source, cache = body
     $cache.add 'mime_' + source, mime = req.headers['content-type']
+    console.log ' FINISHED '.green.bold.inverse, $path.basename(source), body.substr(0,10).blue.inverse
+    console.log $cache.get(source).substr(0,10).blue.inverse
+    console.log $cache.get('mime_'+source).substr(0,10).blue.inverse
   $web
 
 $web.REPLY = (rx,tx)->

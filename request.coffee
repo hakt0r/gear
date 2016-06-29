@@ -40,7 +40,6 @@ $path.sharedHash = (hash) -> $path.join $path.shared, hash
 $fs.mkdirSync $path.shared unless $fs.existsSync $path.shared
 
 $app.on 'web:listening', ->
-  $web.static = require('serve-static')($path.shared)
   $web.wss.on "connection", (socket)->
     socket.inbound = yes
     if false is socket.peer = Peer.fromSocket socket._socket
