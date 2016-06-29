@@ -276,16 +276,7 @@ $require.apt = $function
         INI      INI   * INI       INI           INI
     INI INI INI  INI     INI   INI INI INI       ###
 
-$app.init = {}
-
-$app.init.main = ->
-  argv = $app.argv
-  if ( fnc = $app.cli[cmd = argv.shift()] )
-    r = fnc.apply $command, argv
-  else process.exit 1, console.error "Command not found: ", cmd, argv
-  $require.all => $app.emit 'ready'
-
-setImmediate $app.init.bootstrap = ->
+setImmediate $app.init = ->
   # argv
   argv = process.argv.slice()
   i = 0; while i++ < argv.length
@@ -334,10 +325,10 @@ setImmediate $app.init.bootstrap = ->
     '\n' + "DISPLAY:", process.env.DISPLAY,
     '\n' + "ARGS:", $app.argv,
     '\n' + "PATH:", process.env.PATH )
+  do $app.init.resolveCache
   do $app.init.deps
 
 $app.init.deps = -> # load deps, or install via npm
-  do $app.init.corelib.resolveCache
   console.hardcore 'INIT-DEPS'
   deps = ['underscore','coffee-script','mkdirp','touch','carrier','request','cbor','kexec']
   g = global; f = $fs
@@ -351,6 +342,7 @@ $app.init.deps = -> # load deps, or install via npm
     $require.npm.now deps, $app.init.deps
   console.hardcore 'INIT-DEPS-DONE', Object.keys($async).length
   do $app.init.reload
+  do $app.init.config
 
 $app.init.reload = ->
   need_restart = __filename isnt $path.join $path.cache,'gear.js'
@@ -371,10 +363,24 @@ $app.init.reload = ->
       use: --harmony_object
        or: --harmony_object_observe"""
     process.exit 1
-  do $app.init.corelib
 
-$app.init.corelib = ->
-  do $app.init.corelib.config
+$app.init.config = ->
+  $app.config = new Storage {
+    default: global.$config = {}
+    name: 'config'
+    preWrite:-> return ( [k,v] for k,v of $config )
+    revive:(d)-> $config[d[0]] = d[1]
+    firstRead: (config)->
+      $app.on 'sync', -> $app.config.write()
+      $app.init.main @data = null
+      Object.observe $config, -> do $app.sync }
+
+$app.init.main = ->
+  argv = $app.argv
+  if ( fnc = $app.cli[cmd = argv.shift()] )
+    r = fnc.apply $command, argv
+  else process.exit 1, console.error "Command not found: ", cmd, argv
+  $require.all => $app.emit 'ready'
 
 ###   * CAC CAC     * CAC *       * CAC CAC   CAC     CAC   CAC CAC CAC
     CAC           CAC     CAC   CAC           CAC     CAC   CAC
@@ -382,7 +388,7 @@ $app.init.corelib = ->
     CAC           CAC     CAC   CAC           CAC     CAC   CAC
       * CAC CAC   CAC     CAC     * CAC CAC   CAC     CAC   CAC CAC ###
 
-$app.init.corelib.resolveCache = ->
+$app.init.resolveCache = ->
   return if ( Module = require 'module' ).__resolveFilename
   console.hardcore ' RESOLVE-CACHE '.error
   nodeModule = {}; timer = null
@@ -401,7 +407,7 @@ $app.init.corelib.resolveCache = ->
   cache.add = (key,value)-> $cache.write cache[key] = value
   $static $cache: cache
 
-$app.init.corelib.cache = ->
+$app.init.cache = ->
   console.log 'fscache', 'active'
   try cache = $bson.deserialize $fs.readFileSync cache_path = $path.join $path.cache, 'libcache.bson' catch e then cache = {}
   add = (key,data)-> cache[key] = data; do write
@@ -478,29 +484,6 @@ $app.propertyAction = (mode,path,value)->
     if item.list or item.map
       apply i for i in items = if Array.isArray item then item else if item.list then item.list else [item]
     else apply item )
-
-$app.init.corelib.config = ->
-  $app.config = new Storage {
-    default: global.$config = {}
-    name: 'config'
-    preWrite:-> return ( [k,v] for k,v of $config )
-    revive:(d)-> $config[d[0]] = d[1]
-    firstRead: (config)->
-      $app.on 'sync', -> $app.config.write()
-      $app.init.main @data = null
-      Object.observe $config, -> do $app.sync }
-
-  $app.sync = $async.deadline 100, (cue, done)->
-    $app.emit 'sync', cue, defer = $async.defer ->
-      $app.emit 'sync:complete'
-      done null
-      null
-    do defer.engage
-    null
-
-  $app.syncAdd    = $app.sync.bind null, 'add'
-  $app.syncChange = $app.sync.bind null, 'change'
-  $app.syncRemove = $app.sync.bind null, 'remove'
 
 ### RPC RPC *     RPC RPC *       * RPC RPC
     RPC     RPC   RPC     RPC   RPC
@@ -937,6 +920,18 @@ $async.defer = (fn) -> return o = $function
         delete o.final
         f null
       null
+
+### sync-queue ###
+$app.sync = $async.deadline 100, (cue, done)->
+  $app.emit 'sync', cue, defer = $async.defer ->
+    $app.emit 'sync:complete'
+    done null
+    null
+  do defer.engage
+  null
+$app.syncAdd    = $app.sync.bind null, 'add'
+$app.syncChange = $app.sync.bind null, 'change'
+$app.syncRemove = $app.sync.bind null, 'remove'
 
 ### $sudo helper ###
 unless process.env.SUDO_ASKPASS
