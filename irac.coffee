@@ -21,16 +21,17 @@
 
 return unless $require -> @npm 'mime'; @mod 'auth'
 
+$app.resolvePlugin.unshift (id)-> return Peer.byCA[id.substr(1)] || PEER[id.substr(1)] || false if id[0] is '@'; null
+$app.resolvePlugin.unshift (id)-> return Message.resolveTag(tag.substr(1),no)          || false if id[0] is '#'; null
+
 $app.on 'daemon', -> $app.messageStore = new Storage
   name: 'message'
   revive: (data)-> new Message data
   preWrite:-> Message.byDate.slice()
   filter:(i)-> date:i.date, hash:i.hash, raw:i.raw
-  firstRead:-> $app.on 'sync', (q,defer)->
-    console.log ' SYNC '.red.bold.inverse
-    $app.messageStore.write defer 'messages'
+  firstRead:-> $app.on 'sync', (q,defer)-> $app.messageStore.write defer 'messages'
 
-fail = (msg,opts)-> console.error msg.red.bold.inverse, opts
+fail = (msg,opts)-> console.error msg.error, opts
 
 $static class Message
   @byTag:  {}
@@ -53,7 +54,7 @@ $static class Message
     Array.blindSortedPush Message.byTag, t, @ for t in [@raw.type].concat @raw.tag
     MessageSync.distribute @peer, [@]
     Message.getBlob @raw.hash, @peer if @raw.hash
-    console.debug Peer.format(@peer), ' MESSAGE '.green.inverse, @raw
+    # console.debug Peer.format(@peer), ' MESSAGE '.green.inverse, @raw
   destructor:->
     Array.destructiveRemove Message, 'byDate', @
     Array.destructiveRemove Message.byTag[t] for t in [@type].concat @raw.tag
@@ -64,13 +65,13 @@ $static class Message
   MESSAGE-TYPES
 ###
 
-Message.getTags = (str)-> str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
+Message.getTags = (str)-> str.match(/^[#@$][a-zA-Z0-9_]+/g).unique.trim
 Message.stripTags = (body,tags=[])->
   while tag = body.trim().match /^[#@$][a-zA-Z0-9_]+/
     tags.push tag[0]
     body = body.substr tag[0].length
   return [body,tags]
-  str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
+  str.match(/^[#@$][a-zA-Z0-9_]+/g).unique.trim
 
 Message.peer = (peer)-> new Message peer: peer, ttl:60000, raw: $auth.signMessage
   tag: ['$peer'], type: 'x-irac/peer', seen: irac: peer.irac, ia: peer.ia, ra: peer.ra, onion: peer.onion
@@ -86,13 +87,13 @@ Message.chat = (body)->
 Message.file = (path,tag...)->
   tag = ['file'].concat tag
   hash = null; i = $cp.spawn 'sha1sum', [file]
-  console.debug ' HASHING ', file
+  # console.debug ' HASHING ', file
   i.stdout.on 'data', (d)-> hash = d.toString().replace(/\ .*/, '').trim()
   i.on 'close', (status,signal)->
-    console.debug status, hash
+    # console.debug status, hash
     return unless status is 0
     mime = require 'mime'
-    console.debug 'share', file, hash
+    # console.debug 'share', file, hash
     link = $path.sharedHash hash
     $fs.symlinkSync file, link unless $fs.existsSync link
     new Message raw: $auth.signMessage
@@ -111,7 +112,7 @@ Message.file = (path,tag...)->
 Message.dateSearch = (o,a,date)->
   return [] unless ( list = o[a] ) and list.length > 0
   return [] if list[0].date <= date
-  return list if Array.last(list).date > date
+  return list if list.last.date > date
   return list.slice(0,idx) for i,idx in list when i.date > date
   return []
 
@@ -125,7 +126,7 @@ Message.resolveTag = (tag,create=on)->
 
 Message.getBlob = (hash,peer)->
   return if $fs.existsSync link = $path.sharedHash hash
-  console.debug ' IRAC-GET-BLOB '.yellow.inverse.bold, hash
+  console.debug ' IRAC-GET-BLOB '.warn, hash
   return if $config.hostid.irac is peer.irac
   Request.pipe peer, ['irac_get',hash], $fs.createWriteStream link if peer
   # TODO: $dht.search hash, (peer)-> ...
@@ -150,19 +151,19 @@ $static class MessageSync
     @peer.HEAD = 0 unless typeof @peer.HEAD is 'number'
     MessageSync.byIRAC[@peer.irac] = $evented @
     @offered = []
-    # @peer.log ' NEW-SYNC '.red.bold.inverse, @peer.HEAD
+    # @peer.log ' NEW-SYNC '.error, @peer.HEAD
 
   request:(opts)->
     opts = have: do @offer unless opts
     if ( not opts.force ) and 0 is Object.keyCount opts = Object.trim opts
-      @peer.log ' NO-SYNC '.yellow.bold.inverse, @peer.HEAD, opts
+      @peer.log ' NO-SYNC '.warn, @peer.HEAD, opts
       @emit 'sync'
     else
-      # @peer.log ' SYNC '.yellow.bold.inverse, @peer.HEAD, opts, @offered
+      # @peer.log ' SYNC '.warn, @peer.HEAD, opts, @offered
       Request @peer, ['irac_sync',opts], (error,result)=>
-        # @peer.log ' SYNC-RESULT '.yellow.bold.inverse, result
+        # @peer.log ' SYNC-RESULT '.warn, result
         return if 0 is Object.keyCount remainder = @query result
-        # @peer.log ' SYNC-REMAINDER '.yellow.bold.inverse, remainder
+        # @peer.log ' SYNC-REMAINDER '.warn, remainder
         setImmediate => @request remainder
         null
     return @
@@ -170,14 +171,14 @@ $static class MessageSync
   query:(opts)->
     @peer.HEAD = @offered.map( (i)-> Message.byHash[i].date ).concat( @peer.HEAD || 0 ).sort().reverse()[0]
     @offered = if @offered.length isnt 0 then [@offered[0]] else []
-    @peer.log ' SYNC-QUERY '.yellow.bold.inverse, @peer.HEAD, opts
+    @peer.log ' SYNC-QUERY '.warn, @peer.HEAD, opts
     result = {}
     @recieve opts.push               if opts.push
     result.want = @compare opts.have if opts.have
     result.push = @get     opts.want if opts.want
     result.have = do @offer
     result = Object.trim result
-    @peer.log ' SYNC-REPLY '.green.bold.inverse, result
+    @peer.log ' SYNC-REPLY '.ok, result
     @emit 'sync', result
     result
 
@@ -192,11 +193,11 @@ $static class MessageSync
     return have
 
   get: (list)->
-    list.map( (i)-> Message.byHash[i] ).trim().filter( MessageFilter @peer, Peer.subscribe @peer ).map (i)-> i.raw
+    list.map( (i)-> Message.byHash[i] ).trim.filter( MessageFilter @peer, Peer.subscribe @peer ).map (i)-> i.raw
 
   @queue: {}
   @distribute: (source,items)->
-    console.debug ' MESSAGE-DISTRIBUTE '.white.bold.inverse, items.length
+    console.debug ' MESSAGE-DISTRIBUTE '.bolder, items.length
     queue = MessageSync.queue
     connected = Request.connected
     source = $config.hostid unless source?
@@ -205,14 +206,14 @@ $static class MessageSync
     do @trigger
   @trigger: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
     $app.sync()
-    console.debug ' MESSAGE-QUEUE '.white.bold.inverse
+    console.debug ' MESSAGE-QUEUE '.bolder
     send = (irac,list)->
-      console.debug ' SEND '.white.bold.inverse, irac, list.length
+      console.debug ' SEND '.bolder, irac, list.length
       return unless peer = PEER[irac]
       return unless 0 < list.length
-      peer.hardcore ' PUBLISHING '.bold.inverse, list.length
+      peer.hardcore ' PUBLISHING '.bolder, list.length
       ( new MessageSync peer ).request( push:list.map (i)-> i.raw ).once 'sync', ->
-        peer.hardcore  ' PUBLISHED '.bold.inverse, list.length
+        peer.hardcore  ' PUBLISHED '.bolder, list.length
       MessageSync.queue[irac] = []
     send irac, list for irac, list of MessageSync.queue
     done null
@@ -250,7 +251,7 @@ $command irac_peer: $group '$public', (ack)->
   { irac, root, onion, ia } = peer = $$.peer
   accept = (peer,ack)->
     peer = new Peer.Remote remote:peer.cert, cert:ack
-    peer.log ' PEERED-WITH '.green.bold.inverse
+    peer.log ' PEERED-WITH '.ok
     setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
     peer.groups '$peer'
     peer.cert = ack
@@ -301,8 +302,8 @@ $command peer: Peer.requestAuth = (address)->
 
 $command sync: (irac)-> Peer.sync PEER[irac]; true
 
-$command subscribe:   (tag)-> $config.subscribe.pushOnce tag;      do $app.sync; true
-$command unsubscribe: (tag)-> Array.remove $config.subscribe, tag; do $app.sync; true
+$command subscribe:   (tag)-> $config.subscribe.pushUnique tag; do $app.sync; true
+$command unsubscribe: (tag)-> $config.subscribe.remove tag;   do $app.sync; true
 
 $command say: (message...)-> Message.chat message.join ' '
 
@@ -315,7 +316,7 @@ $command rec: (body,opts)->
   if s = new IRACStream opts then s.hash else false
 
 $command chunk:(hash,id,data)-> if data
-  console.debug ' STREAM-CHUNK '.white.bold.inverse, id, data.length
+  console.debug ' STREAM-CHUNK '.bolder, id, data.length
   return false unless s = IRACStream.byHash[hash]
   return false unless data
   s.write data
@@ -336,12 +337,12 @@ $static class IRACStream
     IRACStream.byHash[@hash] = @
     @path = $path.sharedHash @hash
     $config.meta[@hash] = @msg.raw
-    console.debug ' STREAM '.white.bold.inverse, @hash, @path
+    console.debug ' STREAM '.bolder, @hash, @path
   end:(data)->
-    console.debug ' STREAM-END '.white.bold.inverse, @hash
+    console.debug ' STREAM-END '.bolder, @hash
     @save.close()
   write:(data)->
-    console.debug ' STREAM-BEGIN '.white.bold.inverse, @hash
+    console.debug ' STREAM-BEGIN '.bolder, @hash
     @save = $fs.createWriteStream @path
     @write = @save.write.bind @save
     @write data
@@ -353,16 +354,6 @@ $command show: (tag)->
   Message.resolveTag(tag,no).list.map (i)->
     i = i.item
     i.irac.substr(0,5) + ": " + i.body
-
-$command set: (id,key,value)->
-  item = Peer.byCA[id.substr(1)]        if id[0] is '@'
-  item = PEER[id.substr(1)]             if id[0] is '@' and not item?
-  item = Object.resolve($config+'.'+id) unless item
-  return false unless item
-  for i in ( items = if item.list then item.list else [item] )
-    i[key] = value
-  do $app.sync
-  true
 
 $command ssh_empeer: (host)->
   hostname = $md5 host; peer = null

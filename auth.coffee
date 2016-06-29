@@ -22,17 +22,17 @@
 ###
 
 return unless $require ->
-  @defer()
-  @apt certutil: 'libnss3-tools'
   @npm 'node-forge'
   @mod 'crypto'
+  @apt certutil: 'libnss3-tools'
+  @defer()
 
 setImmediate ->
   $static $auth: new Peer.CA
   do $require.Module.byName.auth.resolve
 
 $app.on 'daemon', ->
-  console.log Peer.format($auth), '  I R A C  '.blue.bold.inverse, ( unless $auth.caDisabled then ' $ca ' else ' $host ' ).green.bold.inverse
+  console.log Peer.format($auth), '  I R A C  '.log, ( unless $auth.caDisabled then ' $ca ' else ' $host ' ).ok
   for i,p of $config.peers when i isnt $config.hostid.irac
     delete $config.peers[i]
     new Peer.Remote p
@@ -83,7 +83,7 @@ class Peer.Shadow extends Peer
   constructor:(opts)->
     return false unless opts.irac
     return peer if ( peer = PEER[opts.irac] )?
-    console.log Peer.format(opts), ' SHADOW '.white.bold.inverse
+    console.log Peer.format(opts), ' SHADOW '.bolder
     Object.assign @, opts
     PEER[@irac] = @
     Request.static @, ['irac_peer'], $nullfn
@@ -96,20 +96,20 @@ class Peer.Remote extends Peer
     direction = if cert.inbound then 'in' else 'out'
     @[k] = v for k,v of settings when v? if settings
     unless cert? and ( cert.raw or cert.substr ) and false isnt @parseCert cert
-      console.error '  PEER WITHOUT IRAC-CERTIFICATE '.red.bold.inverse, cert
+      console.error '  PEER WITHOUT IRAC-CERTIFICATE '.error, cert
       return false
     peer_exists = ( peer = PEER[@irac] )? and not peer.shadow
     if true is peer_exists and true is cert.authorized
       peer.onion = @onion if @onion
-      # peer.log '  EXISTING-PEER '.green.bold.inverse, @cachain?
+      # peer.log '  EXISTING-PEER '.ok, @cachain?
       return peer
     if cert.authorized # XXX and not @group
-      @log  '  AUTO-PEER '.red.bold.inverse, @irac
+      @log  '  AUTO-PEER '.error, @irac
       signedGroup = cert.subject.OU.toString().replace /\$local/, '$host'
       @groups signedGroup
     else @groups '$public'
     do @register
-    @verbose '  PEER '.blue.bold.inverse, cert.authorized
+    @verbose '  PEER '.log, cert.authorized
     Peer.sync @ if ACL.check @, '$peer'
 
   parseCert:(cert)->
@@ -135,7 +135,7 @@ Peer.fromSocket = (socket)->
     $pki.certificateToPem $pki.certificateFromAsn1 $forge.asn1.fromDer $forge.util.createBuffer cert.issuerCertificate.issuerCertificate.raw, 'raw'
     $pki.certificateToPem $pki.certificateFromAsn1 $forge.asn1.fromDer $forge.util.createBuffer cert.issuerCertificate.raw, 'raw' ]
   peer = new Peer.Remote cert, opts
-  # peer.log  '  NETWORK-PEER '.red.bold.inverse, cert.issuerCertificate?, cert.inbound
+  # peer.log  '  NETWORK-PEER '.error, cert.issuerCertificate?, cert.inbound
   peer
 
 class Peer.CA extends Peer
@@ -162,7 +162,7 @@ $static PEER: Peer.byIRAC = $config.peers
 Peer.byCA = {}
 
 Peer.format = (peer)->
-  return ' NULL '.red.bold.inverse unless peer
+  return ' NULL '.error unless peer
   o = []
   o.push ( peer.onion || 'XX' ).substr(0,2).white.bold
   o.push ( peer.irac  || 'XX' ).substr(0,2).yellow.bold
@@ -190,7 +190,7 @@ Peer.CA::setupKeys = (host='me')-> # onion / server / client key - package
   unless $fs.existsSync path = $path.ca host+'.pem'
     exports.key = $rsa.generateKeyPair bits: 1024, e: 0x10001
     $fs.writeFileSync path, $pki.privateKeyToPem exports.key.privateKey
-    console.log ' HOST '.green.bold.inverse, host, $irac exports.key.publicKey
+    console.log ' HOST '.ok, host, $irac exports.key.publicKey
   else exports.key =
     privateKey: privateKey = $pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
     publicKey:  publicKey  = $pki.setRsaPublicKey privateKey.n, privateKey.e
@@ -304,7 +304,7 @@ Peer.CA::setupCA = ->
     unless $fs.existsSync path = $path.ca 'ca-key.pem'
       @cakey = $rsa.generateKeyPair bits: bits, e: 0x10001
       $fs.writeFileSync path, $pki.privateKeyToPem @cakey.privateKey
-      console.log (' CA-KEY['+bits+'-bit/RSA] ').yellow.bold.inverse, $irac @cakey.publicKey
+      console.log (' CA-KEY['+bits+'-bit/RSA] ').warn, $irac @cakey.publicKey
     else @cakey =
       privateKey: privateKey = $pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
       publicKey:  $pki.setRsaPublicKey privateKey.n, privateKey.e
@@ -312,7 +312,7 @@ Peer.CA::setupCA = ->
     unless $fs.existsSync path = $path.ca 'intermediate_ca-key.pem'
       @intermediate_key = $rsa.generateKeyPair bits: bits, e: 0x10001
       $fs.writeFileSync path, $pki.privateKeyToPem @intermediate_key.privateKey
-      console.log (' IC-KEY['+bits+'-bit/RSA] ').yellow.bold.inverse, $irac @intermediate_key.publicKey
+      console.log (' IC-KEY['+bits+'-bit/RSA] ').warn, $irac @intermediate_key.publicKey
     else @intermediate_key =
       privateKey: privateKey = $pki.privateKeyFromPem $fs.readFileSync(path,'utf8')
       publicKey:  $pki.setRsaPublicKey privateKey.n, privateKey.e

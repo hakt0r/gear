@@ -20,7 +20,7 @@
 ###
 
 return unless $require ->
-  @npm 'express','ws','compression','morgan','body-parser'
+  @npm 'express','ws','compression','morgan','body-parser','serve-static'
   @mod 'auth'
 
 $config.web = $config.web || port:2003
@@ -47,13 +47,13 @@ $web.bindLibrary = (path,source,mime='text/javascript',filter)->
     res.setHeader('Content-Type',$cache.get 'mime_'+source)
     res.send $cache.get source
   return if ( cache = $cache.get source ) and ( mime = $cache.get 'mime_' + source )
-  console.log ( cache = source + ' DOWNLOADING ' ).yellow.bold.inverse
+  console.log ( cache = source + ' DOWNLOADING ' ).warn
   $request.get source, (error,req,body)->
     body = filter.apply @, arguments if filter?
     return console.error "BIND-LIBRARY", source, error if error
     $cache.add source, cache = body
     $cache.add 'mime_' + source, mime = req.headers['content-type']
-    console.log ' FINISHED '.green.bold.inverse, $path.basename(source), body.substr(0,10).blue.inverse
+    console.log ' FINISHED '.ok, $path.basename(source), body.substr(0,10).blue.inverse
     console.log $cache.get(source).substr(0,10).blue.inverse
     console.log $cache.get('mime_'+source).substr(0,10).blue.inverse
   $web
@@ -62,7 +62,7 @@ $web.REPLY = (rx,tx)->
   (results)-> tx.end JSON.stringify results
 
 $app.on 'daemon', ->
-  console.log 'WebStart', $config.web
+  console.debug ' WEB-START '.ok, $config.web
   $web.https = require('https').createServer(
     requestCert: yes
     rejectUnauthorized: no
@@ -74,6 +74,7 @@ $app.on 'daemon', ->
   $web.https.on 'request', (req,res)->
     req.client.inbound = yes
     if false is req.peer = res.peer = Peer.fromSocket req.client
+      console.log ' HTTP-REJECT '.error
       return res.end ''
     return $web.apply @, arguments
   $web.use do require('compression') unless $config.web.disableCompression

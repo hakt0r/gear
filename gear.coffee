@@ -25,6 +25,18 @@
          IRAC        IRAC      IRAC   IRAC      IRAC   IRAC
     IRAC IRAC IRAC   IRAC      IRAC   IRAC      IRAC      * IRAC ###
 
+unless process.version[1].match /[456]/
+  console.log """ERROR: nodejs is too old
+    Please use at least v4 available from:
+      https://nodejs.org/download/release/latest-v4.x/"""
+  process.exit 1
+
+do -> # COLORS Module [: what i need in ansi formatting, nothing really :]
+  colormap = bold:1, inverse:7, black:30, red:31, green:32, yellow:33, blue:34, purple:35, cyan:36, white:37, error:'31;1;7', ok:'32;1;7', warn:'33;1;7', bolder:'37;1;7', log:'34;1;7'
+  COLORS = require('tty').isatty() and not process.env.NO_COLORS
+  String._color = if COLORS then ( (k)-> -> '\x1b[' + k  + 'm' + @ + '\x1b[0m' ) else -> -> @
+  Object.defineProperty String::, name, get: String._color k for name, k of colormap
+
 $logo = (get)->
   _logo = """
                           ░▒▒░  .gear.irac.taskd.fleetlink.wantumeni.lastresort. ░▒░
@@ -72,7 +84,7 @@ $logo = (get)->
     [2213,"31",18],[2231,"31",96],[2327,"31",33],[2360,"33;1",27],[2387,"31",8],[2395,"0",0],[2395,"31",26],
     [2421,"31",91],[2512,"31",90],[2602,"31",88],[2690,"31",84],[2774,"31",81],[2855,"31",78],[2933,"31",65],
     [2998,"31",63],[3061,"0",0]]; _enemy = ['eastasia ','oceania  ','eurasia  ','assange ','snowden ','adamwhite']
-  _logo = _logo.replace /snowden  /, _enemy[Math.round(Math.random()*5)]
+  _logo = _logo.replace /snowden  /, _enemy.random
   o = ( ( '\x1b[' + esc + 'm') + _logo.substr(pos,len) for [ pos, esc, len ] in _cmap ).join ''
   return o if get
   print = process.stderr.write.bind process.stderr; print '\n\n\n'; print o; print '\n\n\n'
@@ -143,212 +155,6 @@ unless -1 is process.argv.indexOf('-Q')
   $util.print = ->
   process.on 'uncaughtException', (error)-> $fs.appendFileSync __dirname + '/error.log', JSON.stringify error
 
-### RPC RPC *     RPC RPC *       * RPC RPC
-    RPC     RPC   RPC     RPC   RPC
-    RPC RPC *     RPC RPC       RPC
-    RPC     RPC   RPC           RPC
-    RPC     RPC   RPC             * RPC ###
-
-$static
-  $$: console
-  $group: (group...,fn)-> fn.group = group.concat( fn.group || [] ); fn
-  $command: $function defaultHandler:{}, byType:{}, byName:{}, byGroup:{}, (obj)-> for k,v of obj
-    v.group = ['$local'].concat v.group || []
-    $rpc k, v
-  $rpc: $function open:{}, (key,fn)->
-    wrapper = eval """( function RPC_#{key}(){
-      args = Array.prototype.slice.call(arguments)
-      $$ = args[0] && args[0].reply && args[0].group ? args.shift() : console
-      return ( #{fn.toString().replace(/\(/,key+' (')} ).apply(this,args) } )"""
-    wrapper[k] = v for k in ['group'] when ( v = fn[k] )
-    console.hardcore '\x1b[32mcommand >>>\x1b[0m', key
-    $command.byName[key] = wrapper
-
-class $rpc.scope
-  constructor: (opts) ->
-    Object.assign @, opts
-    _cmd = @cmd
-    return @error "Command not supplied: #{_cmd}" unless @cmd
-    if Array.isArray @cmd then @args = @cmd
-    else if @cmd.split    then @args = @cmd.split /[ \t]+/
-    else return @error "Command not found: #{_cmd}"
-    @args.pop() if ( @args[@args.length-1] || '' ).toString().trim() is ''
-    @cmd = @args.shift()
-    @fnc = $command.byName[@cmd] if @cmd.match
-    return @error "Could not find #{_cmd}"                             unless @fnc?
-    return @error "Not a function #{_cmd}"                             unless @fnc.apply? or @fnc.push?
-    return @error "Access denied: #{_cmd}, no group"                   unless @group?
-    return @error "Access denied: #{_cmd}, non-rpc function"           unless @fnc.group? and Array.isArray @fnc.group
-    return @error "Access denied: have[#{@group}] need[#{@fnc.group}]" unless Array.commons(@fnc.group,@group).length > 0
-    _reply = @reply; @reply = => @finish _reply.bind @, arguments[0]
-    $rpc.open[@id = ++$rpc.serial] = @
-    # console.debug '\x1b[32mRUN\x1b[0m', @cmd, ( if @item then '$' + @item.uid else '' )
-    @defer = $async.defer =>
-      # console.debug '\x1b[32mRESULT\x1b[0m', @return
-      @reply @return unless @pipe
-    try
-      @return = @fnc.apply(@item,[@].concat @args)
-      do @defer.engage
-    catch error then @error 'exception', error.stack.toString()
-  finish: (callback) ->
-    if @done then return false else do callback
-    delete $rpc.open[@id]; @ctx = @cmd = @args = @opts = @id = null
-    @done = true
-  error: (message,object=@cmd) ->
-    console.error Peer.format(@peer), ' RPC-ERROR '.red.inverse, @cmd, message, object
-    @reply error: message, errorData: object
-
-console.rpc    =  '$local'
-console.group  = ['$local']
-console.defer  = ->->
-
-###   * CMD CMD     * CMD *     CMD     CMD   CMD     CMD     * CMD *     CMD     CMD   CMD CMD *
-    CMD           CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD   CMD *   CMD   CMD     CMD
-    CMD           CMD     CMD   CMD     CMD   CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD
-    CMD           CMD     CMD   CMD     CMD   CMD     CMD   CMD     CMD   CMD   * CMD   CMD     CMD
-      * CMD CMD     * CMD *     CMD     CMD   CMD     CMD   CMD     CMD   CMD     CMD   CMD C ###
-
-$command help: (args...) ->
-  $$.reply Object.keys $command.byName
-
-$command cset: (path,value) ->
-  key = ( path = path.split('.') ).pop()
-  return $$.error "Can't change a root object", path if path.length is 0
-  if ( o = Object.resolve path = path.join '.' )
-    if value is 'true' or value is 'false'
-      o[key] = if value is 'true' then true else false
-    if typeof value is 'string'
-      o[key] = value
-    $app.syncChange o
-    $$.reply set:path+"."+key, value:o[key]
-
-$command clist: (path='') ->
-  return unless ( o = Object.resolve path )
-  if ( t = typeof o ).match /(string|number|boolean)/
-    $$.reply o
-  else $$.reply Object.keys(o.byName || o.byURL || o.byID || o )
-
-$command shutdown: -> process.exit 0
-$command linger:->
-
-$app.cli =
-  show:(path)->
-    process.exit 1 unless t = Object.resolve $config, path
-    console.log JSON.stringify t; process.exit 0
-  list:(path='')->
-    process.exit 1 unless t = Object.resolve $config, path
-    console.log JSON.stringify Object.keys t; process.exit 0
-  set:(path,key,value)->
-    if value is undefined then o = $config; value = key; key = path
-    else process.exit 1 unless t = Object.resolve $config, path
-    console.log JSON.stringify o[key] = value; $app.sync();
-  unset:(path,key)->
-    if key is undefined then o = $config; key = path
-    else process.exit 1 unless t = Object.resolve $config, path
-    delete t[key]; $app.sync();
-  restart:->
-    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
-    else do process.cli.stop; do process.cli.start
-  start:->
-    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
-    else $cp.spawn $path.join($path.bin,'gear-daemon'),['daemon','-Q'], detach:yes, stdio:null; process.exit 0
-  stop:->
-    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','stop','gear']
-    else $cp.spawn 'kill',[parseInt $fs.readFileSync p, 'utf8'] if $fs.existsSync p = $path.join($path.cache,'daemon.pid')
-  daemon:->
-    $fs.writeFileSync ($path.join $path.cache,'daemon.pid'), process.pid
-    do $logo
-    $app.emit 'daemon:init'
-    $app.on 'ready', -> $app.emit 'daemon'
-  install: (pkg...)-> $app.on 'ready', ->
-    console.log 'INSTALLING GEAR'
-    if pkg.length is 0
-      UID = ( process.getuid || -> 0 )()
-      { USER, HOME } = process.env
-      GEAR = $path.join $path.modules, 'gear.coffee'
-      if $which 'systemd'
-        $fs.mkdirp.sync d = $path.join HOME,'.local','share','systemd','user'
-        $fs.writeFileSync ( f = $path.join d, 'gear.service' ), """
-          [Unit]
-          Description=GEAR Service
-          [Service]
-          Type=simple
-          TimeoutStartSec=0
-          ExecStop=-#{$path.bin + '/gear'} shutdown
-          ExecStartPre=-#{$path.bin + '/gear'} shutdown
-          ExecStart=#{$which 'coffee'} #{GEAR} daemon
-          [Install]
-          WantedBy=default.target
-        """
-        $cp.script """
-          sudo -A loginctl enable-linger #{USER}
-          systemctl --user | grep -q gear.service &&
-          systemctl --user disable gear
-          systemctl --user enable #{f}
-          systemctl --user restart gear
-        """, -> console.log '__ GEAR WAS SUCCESSFULLY INSTALLED TO SYSTEMD __'; process.exit(0)
-      else if '/etc/rc.local' then $sudo.script """
-        if cat /etc/rc.local | grep "# gear-#{UID}"
-        then echo "\x1b[32mAlready installed to \x1b[33m/etc/rc.local\x1b[0m"
-        else awk '{if(p)print p;p=$0;}END{
-            print "sudo -u #{USER} nodejs #{HOME}/.config/gear/bin/gear-daemon start & # gear-#{UID}"; print p; exit(0)}
-          ' /etc/rc.local > /etc/rc.local.new
-          cat /etc/rc.local.new | grep "# gear-#{UID}" | sh
-        fi
-      """, -> do process.cli.start
-    else switch ( pkg = pkg.shift() )
-      when 'npm' then $require.npm.install.now pkg
-      when 'sys' then $require.apt.install.now pkg
-      else console.log 'Don\'t know how to install:', pkg
-
-$command ssh_update: $app.cli.ssh_update = (host)->
-  $async.series [
-    (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
-    (c)=> $cp.ssh( host, """
-      cd; [ -f .gear_setup.tbz ] || exit 1
-      gear-daemon stop || systemctl --user stop gear
-      mv .gear_setup.tbz .config/gear/modules/
-      cd .config/gear/modules/
-      tar xjvf .gear_setup.tbz
-      rm -rf .gear_setup.tbz
-      cd; coffee .config/gear/modules/gear.coffee install
-      """ ).on 'close', -> do c ]
-
-$command ssh_install: $app.cli.ssh_install = (host)->
-  $async.series [
-    (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
-    (c)=> $cp.ssh( host, """
-      [ -f .gear_setup.tbz ] || exit 1
-      [ "$USER" = "root" ] && sudo= || sudo=sudo
-      i=" "; a=" "
-      which npm  ||                 i="$i npm"
-      which node || which nodejs || i="$i nodejs"
-      which ssh-askpass          || i="$i ssh-askpass"
-      if [ ! "x${i}x" = "x x" ]; then
-        $sudo apt-get update
-        eval $sudo apt-get -y install $i
-      fi
-      which nodejs && [ ! which node ] && $sudo ln -sf $(which nodejs) /usr/bin/node
-      which node && [ ! which nodejs ] && $sudo ln -sf $(which node) /usr/bin/nodejs
-      which node-gyp || a="$a node-gyp"
-      which coffee   || a="$a coffee-script"
-      if [ ! "x${a}x" = "x x" ]; then
-        $sudo npm -g install $a
-      fi
-      cd;
-        rm -rf .gear_setup;
-        mkdir .gear_setup;
-      cd .gear_setup
-        tar xjvf ../.gear_setup.tbz
-        rm -rf   ../.config/gear ../.gear_setup.tbz
-        coffee gear.coffee install
-      cd
-        rm .config/gear/modules &&
-        mv .gear_setup .config/gear/modules
-      echo done; read a
-      """ ).on 'close', => do c ]
-  null
-
 ### REQ REQ *     REQ REQ REQ     * REQ *     REQ     REQ   REQ REQ REQ   REQ REQ *     REQ REQ REQ
     REQ     REQ   REQ           REQ     REQ   REQ     REQ       REQ       REQ     REQ   REQ
     REQ REQ *     REQ REQ REQ   REQ     REQ   REQ     REQ       REQ       REQ REQ *     REQ REQ REQ
@@ -361,7 +167,6 @@ $static $require: $function
     if $path.basename(f) is $path.basename($path.dirname f) then f = $path.dirname f else f
   compile: (source) =>
     dest = source.replace($path.modules,$path.cache).replace(/coffee$/,'js')
-    # console.hardcore "compile", source
     return dest if $fs.existsSync(dest) and Date.parse($fs.statSync(source).mtime) is Date.parse($fs.statSync(dest).mtime)
     $fs.mkdirSync(dir) unless $fs.existsSync dir = $path.dirname(dest)
     $fs.writeFileSync dest, '#!/usr/bin/env node\n' + $coffee.compile $fs.readFileSync source, 'utf8'
@@ -403,10 +208,11 @@ $require.Module = class GEARModule
   checkDeps: ->
     done = yes; mods = $require.Module.byName
     if @deps then @deps.call {
-    defer: (key)=>
-      @defer = $nullfn #; console.hardcore '<defer>', @name, key
+    defer: => unless @resolve
+      done = no
+      @defer = $nullfn; console.hardcore '<defer>', @name
       @resolve = =>
-        delete @resolve; @loaded = true #; console.hardcore '<resolved>', @name
+        delete @resolve; @loaded = true; console.hardcore '<resolved>', @name
     apt:    (args) => done = done && $require.apt args
     npm: (args...) => done = done && $require.npm.apply null, args
     mod: (args...) => for mod in args
@@ -473,17 +279,20 @@ $require.apt = $function
 $app.init = {}
 
 $app.init.main = ->
-  argv = process.argv.slice()
-  i = 0; while i++ < argv.length
-    if argv[i].match /gear(-daemon|\.js|\.coffee)$/
-      argv.splice(0,i+1); break
-  console.hardcore "\x1b[32mCOMMANDLINE\x1b[0m", argv
+  argv = $app.argv
   if ( fnc = $app.cli[cmd = argv.shift()] )
     r = fnc.apply $command, argv
   else process.exit 1, console.error "Command not found: ", cmd, argv
   $require.all => $app.emit 'ready'
 
 setImmediate $app.init.bootstrap = ->
+  # argv
+  argv = process.argv.slice()
+  i = 0; while i++ < argv.length
+    if argv[i].match /gear(-daemon|\.js|\.coffee)$/
+      argv.splice(0,i+1); break
+      console.hardcore "\x1b[32mCOMMANDLINE\x1b[0m", argv
+  $app.argv = argv
   # core environment
   r = $cp.spawnSync('getent',['passwd',process.getuid()]).stdout.toString().trim().split(':')
   process.env.USER          = r[0] unless process.env.USER
@@ -499,6 +308,7 @@ setImmediate $app.init.bootstrap = ->
   # $path[configDir|modules|bin|node_modules|cache]
   subconf = $path.dirname $path.configDir = conf = process.env.GEAR || $path.join process.env.HOME,'.config','gear'
   $path[dir] = $path.join conf, dir for dir in ['cache','node_modules','modules','bin']
+  $path.node = $which('nodejs') || $which('node')
   $fs.mkdirSync(dir) for dir in [subconf,conf,$path.cache,$path.node_modules,$path.bin] when not $fs.existsSync(dir)
   ( console.log 'Error: could not open or create:', conf; process.exit 1 ) unless $fs.existsSync(conf)
   if process.cwd() isnt conf
@@ -522,31 +332,45 @@ setImmediate $app.init.bootstrap = ->
     '\n' + "HOME:", process.env.HOME,
     '\n' + "SHELL_DEFAULT:", process.env.SHELL_DEFAULT,
     '\n' + "DISPLAY:", process.env.DISPLAY,
+    '\n' + "ARGS:", $app.argv,
     '\n' + "PATH:", process.env.PATH )
   do $app.init.deps
 
 $app.init.deps = -> # load deps, or install via npm
   do $app.init.corelib.resolveCache
   console.hardcore 'INIT-DEPS'
-  deps = ['underscore','async','coffee-script','mkdirp','touch','carrier','request','cbor','colors']
-  load = ['underscore','async','coffee-script','mkdirp','touch','carrier','request','cbor']
+  deps = ['underscore','coffee-script','mkdirp','touch','carrier','request','cbor','kexec']
   g = global; f = $fs
-  try
-    require $path.join $path.node_modules, 'colors'
-    [ g._, async, g.$coffee, f.mkdirp, f.touch, g.$carrier, g.$request, g.$cbor ] = load.map (i)->
-      require $path.join $path.node_modules, i
-    $async[k] = v for k,v of async; g.$async = $async
-    console.hardcore 'INIT-DEPS-DONE', Object.keys($async).length
-    do $app.init.reload
+  try [ g._, g.$coffee, f.mkdirp, f.touch, g.$carrier, g.$request, g.$cbor, $cp.kexec ] = deps.map (i)->
+    require $path.join $path.node_modules, i
   catch e
-    process.exit 1 if $app.init.deps.failed;  $app.init.deps.failed = true
-    console.error __filename, e.stack.toString()
+    if $app.init.deps.failed
+      console.error __filename, e.stack.toString()
+      process.exit 1
+    $app.init.deps.failed = true
     $require.npm.now deps, $app.init.deps
+  console.hardcore 'INIT-DEPS-DONE', Object.keys($async).length
+  do $app.init.reload
 
 $app.init.reload = ->
-  if __filename isnt $path.join $path.cache,'gear.js'
-    console.hardcore 'RE-EXECUTING'
-    return require $require.compile $path.join $path.configDir,'modules','gear.coffee'
+  need_restart = __filename isnt $path.join $path.cache,'gear.js'
+  need_restart_harmony = ( not Object.observe ) and not process.env.ADD_HARMONY
+  if need_restart or need_restart_harmony
+    args = [$require.compile $path.join $path.configDir,'modules','gear.coffee']
+    if need_restart_harmony
+      process.env.ADD_HARMONY = yes
+      args.unshift '--harmony_object'         if process.version[1] is '4'
+      args.unshift '--harmony_object_observe' if process.version[1] is '6'
+    args = args.concat $app.argv
+    console.hardcore 'RE-EXECUTING', $which('node'), args
+    if $cp.kexec then $cp.kexec $which('node'), args
+    else return require path
+  unless Object.observe
+    console.log """ERROR: missing Object.observe
+      cannot enable at runtime
+      use: --harmony_object
+       or: --harmony_object_observe"""
+    process.exit 1
   do $app.init.corelib
 
 $app.init.corelib = ->
@@ -560,15 +384,16 @@ $app.init.corelib = ->
 
 $app.init.corelib.resolveCache = ->
   return if ( Module = require 'module' ).__resolveFilename
-  console.debug 'resolveCache'
+  console.hardcore ' RESOLVE-CACHE '.error
   nodeModule = {}; timer = null
   try cache = JSON.parse $fs.readFileSync( fpath = $path.join $path.cache, 'resolve.json' ) catch e then cache = {}
   Object.keys(process.binding('natives')).forEach (n) -> nodeModule[n] = yes
   Module.__resolveFilename = Module._resolveFilename
   Module._resolveFilename = (r,s) ->
-   return r if nodeModule[r]
-   return val if ( val = cache[cpath = if r.match /^\./ then s.filename+"///"+r else r] )?
-   do $cache.write; return cache[cpath] = Module.__resolveFilename.call this,r,s
+    do $cache.write
+    return r if nodeModule[r]
+    return val if ( val = cache[cpath = if r.match /^\./ then s.filename+"///"+r else r] )?
+    return cache[cpath] = try Module.__resolveFilename.call this,r,s catch e then undefined
   Module._resolveFilename[k] = o for k,o of Module.__resolveFilename
   cache.write = -> clearTimeout timer; timer = setTimeout ( ->
     $fs.writeFile fpath, JSON.stringify cache ), 500
@@ -611,22 +436,48 @@ $static Storage: class Storage
     ( @decode  = @decode  || new $cbor.Decoder() ).on 'data', @revive || (data)-> data
     $async.series [ @setup, @read ], ( @firstRead || $nullfn ).bind @
     $app.on 'exit', @writeSync = =>
-      console.log ' ERMERGENCY-WRITE '.red.bold.inverse, @name
+      console.log ' ERMERGENCY-WRITE '.error, @name
       $fs.writeSync @temp, @preWrite(@data).map(@filter).map($cbor.encode)
       $fs.renameSync @temp, @path
   revive:(data)=> @data.push data
   setup:(done=$nullfn)=> $fs.exists @basedir, (exists)=> return do done unless exists; $fs.mkdirp @basedir, done
+  write:(done=$nullfn)=>
+    return if @out
+    pos = 0; @encode = new $cbor.Encoder(); data = @preWrite @data
+    @encode.pipe @out = $fs.createWriteStream @temp
+    @out.on 'drain', write = =>
+      if pos > data.length
+        @out.removeListener 'drain', write
+        return @encode.end()
+      data.slice(pos,1000).map(@filter).map(@encode.write.bind @encode)
+    @out.on 'close', => $fs.rename @temp, @path, =>
+      console.log 'rename'
+      delete @out
+      do done
+    do write
   read:(done=$nullfn)=> $fs.exists @path, (exists)=>
     return done null, @data = @default unless exists
     $fs.createReadStream(@path).pipe(@decode).on('end',done).on('error',=> done null, @data = @default )
-  write:(done=$nullfn)->
-    pos = 0; @encode = new $cbor.Encoder(); data = @preWrite @data
-    @encode.pipe @out = $fs.createWriteStream @temp
-    console.log ' STORING '.inverse, data.length, (@name+'s').inverse
-    @out.on 'drain', write = =>
-      data.slice(pos,1000).map(@filter).map((i)=> console.log i;i).map(@encode.write.bind @encode)
-      ( $fs.rename @temp, @path, => @encode.end(); do done ) if ( pos += 1000 > data.length )
-    do write
+
+$app.resolveId = (id)->
+  return r for test in $app.resolvePlugin when ( r = test id )?
+  return false
+$app.resolvePlugin = [ (id)-> if id is 'config' then return $config; null ]
+
+$app.propertyAction = (mode,path,value)->
+  return false unless mode and path and ( value? or mode isnt 'set' )
+  list = (item)-> Object.keys if key then item[key] else item
+  get = (item)-> if key then item[key] else item
+  set = (item)-> if key then item[key] = value else item = value
+  id = ( path = path.split '.' ).shift(); key = path.pop()
+  return false unless id and item = $app.resolveId id
+  return false unless ( path.length is 0 ) or item = Object.resolve item, path.join '.'
+  apply = if mode is 'set' then set else if mode is 'get' then get else list
+  # console.log mode, path, id, key, value, Object.keys item
+  JSON.stringify (
+    if item.list or item.map
+      apply i for i in items = if Array.isArray item then item else if item.list then item.list else [item]
+    else apply item )
 
 $app.init.corelib.config = ->
   $app.config = new Storage {
@@ -636,7 +487,8 @@ $app.init.corelib.config = ->
     revive:(d)-> $config[d[0]] = d[1]
     firstRead: (config)->
       $app.on 'sync', -> $app.config.write()
-      $app.init.main @data = null }
+      $app.init.main @data = null
+      Object.observe $config, -> do $app.sync }
 
   $app.sync = $async.deadline 100, (cue, done)->
     $app.emit 'sync', cue, defer = $async.defer ->
@@ -649,6 +501,188 @@ $app.init.corelib.config = ->
   $app.syncAdd    = $app.sync.bind null, 'add'
   $app.syncChange = $app.sync.bind null, 'change'
   $app.syncRemove = $app.sync.bind null, 'remove'
+
+### RPC RPC *     RPC RPC *       * RPC RPC
+    RPC     RPC   RPC     RPC   RPC
+    RPC RPC *     RPC RPC       RPC
+    RPC     RPC   RPC           RPC
+    RPC     RPC   RPC             * RPC ###
+
+$static
+  $$: console
+  $group: (group...,fn)-> fn.group = group.concat( fn.group || [] ); fn
+  $command: $function defaultHandler:{}, byType:{}, byName:{}, byGroup:{}, (obj)-> for k,v of obj
+    v.group = ['$local'].concat v.group || []
+    $rpc k, v
+  $rpc: $function open:{}, (key,fn)->
+    wrapper = eval """( function RPC_#{key}(){
+      args = Array.prototype.slice.call(arguments)
+      $$ = args[0] && args[0].reply && args[0].group ? args.shift() : console
+      return ( #{fn.toString().replace(/\(/,key+' (')} ).apply(this,args) } )"""
+    wrapper[k] = v for k in ['group'] when ( v = fn[k] )
+    console.hardcore '\x1b[32mcommand >>>\x1b[0m', key
+    $command.byName[key] = wrapper
+
+class $rpc.scope
+  constructor: (opts) ->
+    Object.assign @, opts
+    _cmd = @cmd
+    return @error "Command not supplied: #{_cmd}" unless @cmd
+    if Array.isArray @cmd then @args = @cmd
+    else if @cmd.split    then @args = @cmd.split /[ \t]+/
+    else return @error "Command not found: #{_cmd}"
+    @args.pop() if ( @args[@args.length-1] || '' ).toString().trim() is ''
+    @cmd = @args.shift()
+    @fnc = $command.byName[@cmd] if @cmd.match
+    return @error "Could not find #{_cmd}"                             unless @fnc?
+    return @error "Not a function #{_cmd}"                             unless @fnc.apply? or @fnc.push?
+    return @error "Access denied: #{_cmd}, no group"                   unless @group?
+    return @error "Access denied: #{_cmd}, non-rpc function"           unless @fnc.group? and Array.isArray @fnc.group
+    return @error "Access denied: have[#{@group}] need[#{@fnc.group}]" unless Array.commons(@fnc.group,@group).length > 0
+    _reply = @reply; @reply = => @finish _reply.bind @, arguments[0]
+    $rpc.open[@id = ++$rpc.serial] = @
+    # console.debug '\x1b[32mRUN\x1b[0m', @cmd, ( if @item then '$' + @item.uid else '' )
+    @defer = $async.defer =>
+      # console.debug '\x1b[32mRESULT\x1b[0m', @return
+      @reply @return unless @pipe
+    try
+      @return = @fnc.apply(@item,[@].concat @args)
+      do @defer.engage
+    catch error then @error 'exception', error.stack.toString()
+  finish: (callback) ->
+    if @done then return false else do callback
+    delete $rpc.open[@id]; @ctx = @cmd = @args = @opts = @id = null
+    @done = true
+  error: (message,object=@cmd) ->
+    console.error Peer.format(@peer), ' RPC-ERROR '.red.inverse, @cmd, message, object
+    @reply error: message, errorData: object
+
+console.rpc    =  '$local'
+console.group  = ['$local']
+console.defer  = ->->
+
+###   * CMD CMD     * CMD *     CMD     CMD   CMD     CMD     * CMD *     CMD     CMD   CMD CMD *
+    CMD           CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD   CMD *   CMD   CMD     CMD
+    CMD           CMD     CMD   CMD     CMD   CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD
+    CMD           CMD     CMD   CMD     CMD   CMD     CMD   CMD     CMD   CMD   * CMD   CMD     CMD
+      * CMD CMD     * CMD *     CMD     CMD   CMD     CMD   CMD     CMD   CMD     CMD   CMD C ###
+
+$app.cli =
+  help:  -> console.log $command.byName.help.apply  no,arguments; process.exit 0
+  set:   -> console.log $command.byName.set.apply   no,arguments; process.exit 0
+  get:   -> console.log $command.byName.get.apply   no,arguments; process.exit 0
+  list:  -> console.log $command.byName.list.apply  no,arguments; process.exit 0
+  unset: -> console.log $command.byName.unset.apply no,arguments; process.exit 0
+  restart:->
+    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
+    else do process.cli.stop; do process.cli.start
+  start:->
+    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
+    else $cp.spawn $path.join($path.bin,'gear-daemon'),['daemon','-Q'], detach:yes, stdio:null; process.exit 0
+  stop:->
+    if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','stop','gear']
+    else $cp.spawn 'kill',[parseInt $fs.readFileSync p, 'utf8'] if $fs.existsSync p = $path.join($path.cache,'daemon.pid')
+  daemon:->
+    $fs.writeFileSync ($path.join $path.cache,'daemon.pid'), process.pid
+    do $logo
+    $app.emit 'daemon:init'
+    $app.on 'ready', -> $app.emit 'daemon'
+  install: (pkg...)-> $app.on 'ready', ->
+    console.log 'INSTALLING GEAR'
+    if pkg.length is 0
+      UID = ( process.getuid || -> 0 )()
+      { USER, HOME } = process.env
+      GEAR = $path.join $path.modules, 'gear.coffee'
+      if $which 'systemd'
+        $fs.mkdirp.sync d = $path.join HOME,'.local','share','systemd','user'
+        $fs.writeFileSync ( f = $path.join d, 'gear.service' ), """
+          [Unit]
+          Description=GEAR Service
+          [Service]
+          Type=simple
+          TimeoutStartSec=0
+          ExecStop=-#{$path.bin + '/gear'} shutdown
+          ExecStartPre=-#{$path.bin + '/gear'} shutdown
+          ExecStart=#{$which 'coffee'} #{GEAR} daemon
+          [Install]
+          WantedBy=default.target
+        """
+        $cp.script """
+          sudo -A loginctl enable-linger #{USER}
+          systemctl --user | grep -q gear.service &&
+          systemctl --user disable gear
+          systemctl --user enable #{f}
+          systemctl --user restart gear
+        """, -> console.log '__ GEAR WAS SUCCESSFULLY INSTALLED TO SYSTEMD __'; process.exit(0)
+      else if '/etc/rc.local' then $sudo.script """
+        if cat /etc/rc.local | grep "# gear-#{UID}"
+        then echo "\x1b[32mAlready installed to \x1b[33m/etc/rc.local\x1b[0m"
+        else awk '{if(p)print p;p=$0;}END{
+            print "sudo -u #{USER} nodejs #{HOME}/.config/gear/bin/gear-daemon start & # gear-#{UID}"; print p; exit(0)}
+          ' /etc/rc.local > /etc/rc.local.new
+          cat /etc/rc.local.new | grep "# gear-#{UID}" | sh
+        fi
+      """, -> do process.cli.start
+    else switch ( pkg = pkg.shift() )
+      when 'npm' then $require.npm.install.now pkg
+      when 'sys' then $require.apt.install.now pkg
+      else console.log 'Don\'t know how to install:', pkg
+
+$command help:   (args...)-> do $app.cli.help
+$command set: (path,value)-> $app.propertyAction 'set',  path, value
+$command get:       (path)-> $app.propertyAction 'get',  path
+$command list:      (path)-> $app.propertyAction 'list', path
+$command unset:     (path)-> $app.propertyAction 'del',  path
+$command shutdown:        -> process.exit 0
+$command linger:          ->
+
+$command ssh_update: $app.cli.ssh_update = (host)->
+  $async.series [
+    (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
+    (c)=> $cp.ssh( host, """
+      cd; [ -f .gear_setup.tbz ] || exit 1
+      gear-daemon stop || systemctl --user stop gear
+      mv .gear_setup.tbz .config/gear/modules/
+      cd .config/gear/modules/
+      tar xjvf .gear_setup.tbz
+      rm -rf .gear_setup.tbz
+      cd; coffee .config/gear/modules/gear.coffee install
+      """ ).on 'close', -> do c ]
+
+$command ssh_install: $app.cli.ssh_install = (host)->
+  $async.series [
+    (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
+    (c)=> $cp.ssh( host, """
+      [ -f .gear_setup.tbz ] || exit 1
+      [ "$USER" = "root" ] && sudo= || sudo=sudo
+      i=" "; a=" "
+      which npm  ||                 i="$i npm"
+      which node || which nodejs || i="$i nodejs"
+      which ssh-askpass          || i="$i ssh-askpass"
+      if [ ! "x${i}x" = "x x" ]; then
+        $sudo apt-get update
+        eval $sudo apt-get -y install $i
+      fi
+      which nodejs && [ ! which node ] && $sudo ln -sf $(which nodejs) /usr/bin/node
+      which node && [ ! which nodejs ] && $sudo ln -sf $(which node) /usr/bin/nodejs
+      which node-gyp || a="$a node-gyp"
+      which coffee   || a="$a coffee-script"
+      if [ ! "x${a}x" = "x x" ]; then
+        $sudo npm -g install $a
+      fi
+      cd;
+        rm -rf .gear_setup;
+        mkdir .gear_setup;
+      cd .gear_setup
+        tar xjvf ../.gear_setup.tbz
+        rm -rf   ../.config/gear ../.gear_setup.tbz
+        coffee gear.coffee install
+      cd
+        rm .config/gear/modules &&
+        mv .gear_setup .config/gear/modules
+      echo done; read a
+      """ ).on 'close', => do c ]
+  null
 
 ###   * CLB CLB     * CLB *     CLB CLB *     CLB CLB CLB   CLB           CLB CLB CLB   CLB CLB *
     CLB           CLB     CLB   CLB     CLB   CLB           CLB               CLB       CLB     CLB
@@ -669,34 +703,39 @@ $util.debuglog = $util.debuglog || -> ->
 Boolean.default = (val,def)-> if val then val isnt 'false' else def
 
 ### Array enhancements ###
-Array::trim =         -> return ( @filter (i)-> i? and i isnt false ) || []
-Array::last =         -> @[@length-1]
-Array::unique =       -> u={}; @filter (i)-> return u[i] = on unless u[i]; no
-Array::remove =   (v) -> @splice i, 1 if i = @indexOf v
-Array::pushOnce = (v) -> @push v if -1 is @indexOf v
-Array.last    =   (a) -> a[a.length-1]
-Array.remove  = (a,v) -> a.splice i, 1 if i = a.indexOf v
-Array.random  =   (a) -> a[Math.round Math.random()*(a.length-1)]
-Array.commons = (a,b) -> a.filter (i)-> -1 isnt b.indexOf i
-Array.slice   = (a,c) -> Array::slice.call a||[], c
-Array.unique  =   (a) -> u={}; a.filter (i)-> return u[i] = on unless u[i]; no
-Array.oneSharedItem = (a,b)->
-  return true for v in a when -1 isnt b.indexOf v
-  return false
+Object.defineProperties Array::,
+  trim:get:          -> return ( @filter (i)-> i? and i isnt false ) || []
+  last:get:          -> @[@length-1]
+  first:get:         -> @[0]
+  random:get:        -> @[Math.round Math.random()*(@length-1)]
+  unique:get:        -> u={}; @filter (i)-> return u[i] = on unless u[i]; no
+( (k)-> Array[k] = (a)-> a[k] )( k ) for k in ['trim','last','first','unique','random']
+
+Array::remove       = (v) -> @splice i, 1 if i = @indexOf v; @
+Array::pushUnique   = (v) -> @push v if -1 is @indexOf v
+Array::commons      = (b) -> @filter (i)-> -1 isnt b.indexOf i
+( (k)-> Array[k] = (a,v)-> a[k](v) )( k ) for k in ['remove','pushUnique','commons']
+
+Array.slice         = (a,c) -> Array::slice.call a||[], c
+Array.oneSharedItem = (b)-> return true for v in @ when -1 isnt b.indexOf v; false
+
 Array.blindPush = (o,a,e)->
   list = o[a] || o[a] = []
   list.push e if -1 is list.indexOf e
+
 Array.blindSortedPush = (o,a,e,key='date')->
   return o[a] = [e] unless ( list = o[a] ) and list.length > 0
   return            unless -1 is list.indexOf e
   return list.unshift e if list[0][key] > e[key]
   break for item, idx in list when item[key] > e[key]
   list.splice idx, 0, e
+
 Array.blindConcat = (o,a,e)->
   o[a] = ( o[a] || o[a] = [] ).concat e
+
 Array.destructiveRemove = (o,a,e)->
   return unless list = o[a]
-  Array.remove list, e
+  list.remove e
   delete o[a] if list.length is 0
 
 ### Object enhancements ###
@@ -705,8 +744,7 @@ Object.keyCount = (o)-> Object.keys(o).length
 Object.resolve = (o,path)->
   ( path = o; o = global ) unless path?
   return o if not path or path is ''
-  l = path.split '.'
-  return false unless ( o = o[l.shift()] ) while l.length > 0
+  return false for k in ( l = path.split '.' ) when not ( o = o[k] )?
   return o
 
 Object.unroll = (obj, handle)->
@@ -785,8 +823,37 @@ class Expect
     rec[1] line, match
     break
 
-### Extensions to the [$]async module ###
-$async = {} # async is not loaded yet
+### $async functions / inpired by npm:async ###
+$static $async: {}
+
+$async.series = (list,done=$nullfn)->
+  setImmediate next = (error,args...)->
+    return done.call ctx, error, args      if error
+    return fn.apply  ctx, [next].concat args if fn = list.shift()
+    return done.call ctx
+  ctx = list:list, done:done
+
+$async.parallel = (list,done=$nullfn)->
+  return done null, [] if list.length is null
+  finish = -> done ( if error.length is 0 then null else error ), result
+  result = new Array list.length; error = new Array list.length; count=0;
+  cb = (i,fn)-> fn (error,args...)-> error[i] = error; result[i] = args; if ++count is list.length then do finish
+  cb idx, fn for fn, idx in list
+  null
+
+$async.limit = (token,timeout,callback)->
+  unless callback
+    callback = timeout
+    timeout  = 0
+  clearTimeout t if ( t = $limit[token] )
+  $limit[token] = setTimeout callback, 0
+
+$async.cue = (worker)->
+  cue = []; running = no
+  tip = -> unless running
+    return running = no unless task = cue.shift()
+    running = yes; worker task, -> tip running = no
+  (task...)-> tip cue.push task
 
 $async.debug = (e,c,o=5000)-> late = no; return (d) ->
   console.hardcore '+>>', e
@@ -798,15 +865,8 @@ $async.debug = (e,c,o=5000)-> late = no; return (d) ->
 
 $async.deadline = (deadline,worker)->
   running = no; timer = null; cue = []
-  # sources = {}
-  reset = ->
-    return running = no if cue.length is 0
-    setImmediate guard
-  guard = ->
-    # console.log '<sync-source>', f, v for f,v of sources; sources = {}
-    running = yes
-    worker cue.slice(), reset
-    cue = []
+  reset = -> return running = no if cue.length is 0; setImmediate guard
+  guard = -> running = yes; worker cue.slice(), reset; cue = []
   return trigger = ->
     cue.push arguments
     return if running
@@ -816,20 +876,15 @@ $async.deadline = (deadline,worker)->
 
 $async.pushup = (opts)->
   { worker, threshold, deadline } = opts
-  timer = running = again = null
-  cue   = []
-  reset = ->
-    setImmediate guard if again
-    running = again = no
-  guard = ->
-    running = yes; c = cue.slice(); cue = []
-    worker c, reset
+  timer = running = again = null; cue = []
+  reset = -> setImmediate guard if again; running = again = no
+  guard = -> running = yes; worker cue.slice(), reset; cue = []
   return ->
     cue.push arguments
     return again = true if running
     if cue.length < threshold
       clearTimeout timer
-      timer  = setTimeout guard, deadline
+      timer = setTimeout guard, deadline
     else clearTimeout timer; setImmediate guard
 
 $async.throttle = (interval,key,callback)->
@@ -882,20 +937,6 @@ $async.defer = (fn) -> return o = $function
         delete o.final
         f null
       null
-
-$async.limit = (token,timeout,callback)->
-  unless callback
-    callback = timeout
-    timeout  = 0
-  clearTimeout t if ( t = $limit[token] )
-  $limit[token] = setTimeout callback, 0
-
-$async.cue = (worker)->
-  cue = []; running = no
-  tip = -> unless running
-    return running = no unless task = cue.shift()
-    running = yes; worker task, -> tip running = no
-  (task...)-> tip cue.push task
 
 ### $sudo helper ###
 unless process.env.SUDO_ASKPASS

@@ -242,7 +242,6 @@ Message.formatDestination = (item)-> item.tag.map Message.formatTag
 
 Message.formatTag = (tag)->
   raw = tag.substr 1
-  console.log  tag, raw
   switch tag[0]
     when '@'
       if      ( ca = Peer.byCA[raw] ) then Peer.formatCA ca[0]
@@ -253,13 +252,13 @@ Message.formatTag = (tag)->
     else tag.red
 
 Message.tagToClass = (tag)-> 'byTag_' + tag.replace('$','_dollar_').replace('@','_at_').replace('#','_hash_')
-Message.getTags = (str)-> str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
+Message.getTags = (str)-> str.match(/^[#@$][a-zA-Z0-9_]+/g).unique.trim
 Message.stripTags = (body,tags=[])->
   while tag = body.trim().match /^[#@$][a-zA-Z0-9_]+/
     tags.push tag[0]
     body = body.substr tag[0].length
   return [body,tags]
-  str.match(/^[#@$][a-zA-Z0-9_]+/g).unique().trim()
+  str.match(/^[#@$][a-zA-Z0-9_]+/g).unique.trim
 
 Message.text = (item)-> """
   <div class="message chat">
@@ -353,7 +352,6 @@ window.Peer = class Peer
   constructor: (opts)->
     @update opts
     Peer.bySA[opts.irac] = @
-    # console.log @
   update:(opts)->
     Object.assign @, opts
     return console.log 'NO-IRAC', @, opts unless @irac
@@ -394,7 +392,7 @@ Peer.formatCA = (peer)->
 
 Peer.format = (peer)->
   return Peer.formatCA peer if peer.irac is peer.ra
-  return ' NULL '.red.bold.inverse unless peer
+  return ' NULL '.error unless peer
   return [' ','<i class="fa fa-user"></i>'.blue,' ',(peer.name||'here')].join '' if peer.irac is $me.irac
   return [' ','<i class="fa fa-user"></i>'.white,' ',peer.name].join '' if peer.name
   o = []
@@ -554,10 +552,10 @@ window.Action =
     default: item[0].caname || ''
     callback:(v)->
       i.caname = v for i in Peer.byCA[item]
-      request ['set', '@'+item, 'caname', v]
+      request ['set', '@'+item+'.caname', v]
   peer:rename:(item)-> new Prompt.Text
     query:'Enter a new NAME for ' + item
-    callback:(v)-> request ['set', '@'+item, 'name', Peer.bySA[item].name = v]
+    callback:(v)-> request ['set', '@'+item+'.name', Peer.bySA[item].name = v]
 
 
 

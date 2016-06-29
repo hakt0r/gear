@@ -88,7 +88,7 @@ Request.Agent = (opts) ->
   @protocol = 'https:'
   @createConnection = (opts) ->
     host = opts.host
-    _error = (stage)-> (error)-> console.hardcore ' SOCKSJS '.red.bold.inverse, opts.host, 'error:' + stage, error
+    _error = (stage)-> (error)-> console.hardcore ' SOCKSJS '.error, opts.host, 'error:' + stage, error
     remote = ssl:yes, ca:opts.ca, cert:opts.cert, key:opts.key, host:opts.host, port: opts.port
     socks  = host:"127.0.0.1", port:$config.tor.port, localAddress: '127.0.0.1'
     socket = new socksjs remote, socks
@@ -145,7 +145,7 @@ Request.static = (peer,args,callback) ->
     if msg.code is 'ENOTFOUND' and peer.address
       delete peer.address
       return Request.retry 0, req
-    console.error " REQUEST-ERROR ".red.bold.inverse, arguments[0]
+    console.error " REQUEST-ERROR ".error, arguments[0]
   null
 
 Request.pipe = (peer,args,target,callback) ->
@@ -155,15 +155,16 @@ Request.pipe = (peer,args,target,callback) ->
   null
 
 Request.connect = (peer) -> do req = ->
-  return ( peer.debug  ' WSC-ALREADY-CONNECTED '.green.bold.inverse; true ) if Request.connected[irac = peer.irac]
-  return ( peer.debug  ' WSC-ALREADY-CONNECTING '.red.bold.inverse; false ) if Request.connecting[irac]
+  return ( peer.debug  ' WSC-ALREADY-CONNECTED '.ok; true ) if Request.connected[irac = peer.irac]
+  return ( peer.debug  ' WSC-ALREADY-CONNECTING '.error; false ) if Request.connecting[irac]
   session = {}; opts = Request.tlsOpts peer, 'wss'
   # console.hardcore 'WSC-CONNECTING', opts.url
   socket = new Request.WebSocket opts.url, opts
   socket.on 'open', ->
-    socket.peer = Peer.fromSocket socket._socket.outSocket || socket._socket
     socket.removeListener 'error', connect_error
-    Request.acceptSocket socket if socket.peer.irac is peer.irac
+    if false is socket.peer = Peer.fromSocket socket._socket.outSocket || socket._socket
+      socket.close()
+    else Request.acceptSocket socket if socket.peer.irac is peer.irac
     null
   socket.on 'error', connect_error = (error)->
     return                          if Request.connected[irac]
@@ -172,10 +173,10 @@ Request.connect = (peer) -> do req = ->
     return Request.retry 10000, req if error      is 'SOCKS: TTL expired'
     return Request.retry 5000,  req if error.code is 'ECONNREFUSED'
     if error.code is 'ENOTFOUND' and peer.address
-      console.debug Peer.format(peer).inverse, ' WSC-DISABLE-DIRECT '.yellow.bold.inverse
+      console.debug Peer.format(peer).inverse, ' WSC-DISABLE-DIRECT '.warn
       delete peer.address
       return Request.retry 0, req
-    console.error Peer.format(peer), ' WSC-CONNECT-ERROR '.red.bold.inverse, error
+    console.error Peer.format(peer), ' WSC-CONNECT-ERROR '.error, error
     delete Request.connecting[irac]
     null
   true
@@ -187,7 +188,7 @@ Request.acceptSocket = (socket)->
     delete Request.connecting[irac] if socket is Request.connecting[irac]
     delete Request.connected[irac]  if socket is Request.connected[irac]
   close = (error)->
-    peer.debug  ' WS-CLOSE '.blue.bold.inverse, error
+    peer.debug  ' WS-CLOSE '.log, error
     peer.lastSeen = Date.now()
     do unregister
     Message.peerLost peer
@@ -196,12 +197,12 @@ Request.acceptSocket = (socket)->
     null
   fail = (message,data)->
     socket.close(); do unregister
-    console.error Peer.format(peer||{}), message.red.bold.inverse, data; false
+    console.error Peer.format(peer||{}), message.error, data; false
   return fail ' REQUEST-NO-PEER ' unless ( peer = socket.peer )?
   return fail ' REQUEST-NO-IRAC ' unless ( irac = peer.irac )?
   if ( s = Request.connected[irac] ) and s isnt socket
     return fail ' WSC-DOUBLE '
-  peer.hardcore ' WS-ACCEPT '.green.bold.inverse
+  peer.hardcore ' WS-ACCEPT '.ok
 
   delete Request.connecting[irac] if Request.connecting[irac] is socket
   Request.connected[peer.irac] = socket
@@ -221,13 +222,13 @@ Request.acceptSocket = (socket)->
 
   socket.on "message", (m)->
     try m = $cbor.decode m
-    catch e then return peer.error ' WS-INVALID-BSON '.red.bold.inverse, $util.inspect m
+    catch e then return peer.error ' WS-INVALID-BSON '.error, $util.inspect m
     # peer.hardcore  'WS-MESSAGE', $util.inspect m
 
-    return socket.fail Peer.format(peer), ' WS-NOT-AN-ARRAY '.red.bold.inverse, m unless Array.isArray m
+    return socket.fail Peer.format(peer), ' WS-NOT-AN-ARRAY '.error, m unless Array.isArray m
 
     [ msgType, uid, msg ] = m
-    return socket.fail Peer.format(peer), ' WS-INVALID-STRUCTURE '.red.bold.inverse, m unless msgType? and uid? and msg? and msg.push?
+    return socket.fail Peer.format(peer), ' WS-INVALID-STRUCTURE '.error, m unless msgType? and uid? and msg? and msg.push?
 
     if msgType is REQUEST
       # console.hardcore 'WS-RPC', uid, msg
@@ -237,19 +238,19 @@ Request.acceptSocket = (socket)->
     else if ( msgType is RESPONSE ) and ( queue = Request.active[irac] )?
       for request in queue.slice() when request.uid is uid
         if typeof ( callback = request[2] ) is 'function'
-          # peer.hardcore  ' WS-RESPONSE '.green.bold.inverse, uid, $util.inspect msg
+          # peer.hardcore  ' WS-RESPONSE '.ok, uid, $util.inspect msg
           callback.apply null, [null].concat msg
-        Array.remove queue, request
+        queue.remove request
         break
 
     else if msgType is ERROR
-      peer.error ' WS-REMOTE-ERROR '.red.bold.inverse, msg.join '\n  '
+      peer.error ' WS-REMOTE-ERROR '.error, msg.join '\n  '
 
-    else peer.error ' WS-ILLEGAL '.red.bold.inverse, msgType, uid, msg
+    else peer.error ' WS-ILLEGAL '.error, msgType, uid, msg
     null
 
   socket.on 'error', (error)->
-    peer.error ' WS-ERROR '.red.bold.inverse, error
+    peer.error ' WS-ERROR '.error, error
     null
 
   socket.on 'close', close

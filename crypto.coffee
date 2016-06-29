@@ -21,7 +21,9 @@
 
 ###
 
-{ tls, asn1, pkcs12, pki, md } = forge = $require 'node-forge'
+return unless $require -> @npm 'node-forge'
+
+{ tls, asn1, pkcs12, pki, md } = forge = require 'node-forge'
 { md5, sha1, sha256, sha512 }   = md
 { rsa } = pki
 
