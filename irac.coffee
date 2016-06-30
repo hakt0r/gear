@@ -19,7 +19,7 @@
 
 ###
 
-return unless $require -> @npm 'mime'; @mod 'auth'
+return unless $require -> @npm 'mime'; @mod 'rpc', 'auth'
 
 $app.resolvePlugin.unshift (id)-> return Peer.byCA[id.substr(1)] || PEER[id.substr(1)] || false if id[0] is '@'; null
 $app.resolvePlugin.unshift (id)-> return Message.resolveTag(tag.substr(1),no)          || false if id[0] is '#'; null

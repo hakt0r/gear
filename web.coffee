@@ -23,11 +23,9 @@ return unless $require ->
   @npm 'express','ws','compression','morgan','body-parser','serve-static'
   @mod 'auth'
 
-$config.web = $config.web || port:2003
-
-$static $web: require('express')()
-
+$config.web  = $config.web || port:2003
 $config.meta = $config.meta || {}
+$static $web: require('express')()
 
 $web.static = require('serve-static')($path.shared,setHeaders:(res,fullpath)->
   res.setHeader 'X-Powered-By', 'irac/express/nodejs'

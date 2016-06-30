@@ -25,18 +25,6 @@
          IRAC        IRAC      IRAC   IRAC      IRAC   IRAC
     IRAC IRAC IRAC   IRAC      IRAC   IRAC      IRAC      * IRAC ###
 
-unless process.version[1].match /[456]/
-  console.log """ERROR: nodejs is too old
-    Please use at least v4 available from:
-      https://nodejs.org/download/release/latest-v4.x/"""
-  process.exit 1
-
-do -> # COLORS Module [: what i need in ansi formatting, nothing really :]
-  colormap = bold:1, inverse:7, black:30, red:31, green:32, yellow:33, blue:34, purple:35, cyan:36, white:37, error:'31;1;7', ok:'32;1;7', warn:'33;1;7', bolder:'37;1;7', log:'34;1;7'
-  COLORS = require('tty').isatty() and not process.env.NO_COLORS
-  String._color = if COLORS then ( (k)-> -> '\x1b[' + k  + 'm' + @ + '\x1b[0m' ) else -> -> @
-  Object.defineProperty String::, name, get: String._color k for name, k of colormap
-
 $logo = (get)->
   _logo = """
                           ░▒▒░  .gear.irac.taskd.fleetlink.wantumeni.lastresort. ░▒░
@@ -89,8 +77,6 @@ $logo = (get)->
   return o if get
   print = process.stderr.write.bind process.stderr; print '\n\n\n'; print o; print '\n\n\n'
 
-process.title = """GEAR_#{process.pid}"""
-
 global.$static = (args...) -> while a = do args.shift
   if ( t = typeof a ) is 'string' then global[a] = do args.shift
   else if a::? and a::constructor? and a::constructor.name?
@@ -98,31 +84,37 @@ global.$static = (args...) -> while a = do args.shift
   else ( global[k] = v for k,v of a )
   null
 
-$static
-  $app:  new ( EventEmitter = require('events').EventEmitter )
-  $os:   require 'os'
-  $fs:   require 'fs'
-  $cp:   require 'child_process'
-  $util: require 'util'
-  $path: require 'path'
-  $logo: $logo
-  $nullfn: ->
-  $evented: (obj)->
-    Object.assign obj, EventEmitter::; EventEmitter.call obj; obj.setMaxListeners(0); return obj
-  $function: (members,func)->
-    unless func then func = members else ( func[k] = v for k,v of members )
-    func
-  $which: (name)->
-    w = $cp.spawnSync 'which', [name]
-    return false if w.status isnt 0
-    return w.stdout.toString().trim()
-  $cue: collect: (init,callback)-> # recursion unroll with callback :D
-    cue = if Array.isArray init then init else [init]
-    add = cue.push.bind cue; res = []
-    res = res.concat callback cue.shift(),add while cue.length > 0
-    return res
+global.$app =  new ( EventEmitter = require('events').EventEmitter )
+global.$os =   require 'os'
+global.$fs =   require 'fs'
+global.$cp =   require 'child_process'
+global.$util = require 'util'
+global.$path = require 'path'
+global.$logo = $logo
+global.$nullfn = ->
+global.$evented = (obj)-> Object.assign obj, EventEmitter::; EventEmitter.call obj; obj.setMaxListeners(0); return obj
+global.$function = (members,func)-> unless func then func = members else ( func[k] = v for k,v of members ); func
+global.$which = (name)-> w = $cp.spawnSync 'which',[name]; return false if w.status isnt 0; return w.stdout.toString().trim()
+global.$cue = collect: (init,callback)-> # recursion unroll with callback :D
+  cue = if Array.isArray init then init else [init]
+  add = cue.push.bind cue; res = []
+  res = res.concat callback cue.shift(),add while cue.length > 0
+  return res
+
+unless process.version[1].match /[456]/
+  console.log """ERROR: nodejs is too old
+    Please use at least v4 available from:
+      https://nodejs.org/download/release/latest-v4.x/"""
+  process.exit 1
+
+do -> # COLORS Module [: what i need in ansi formatting, nothing really :]
+  colormap = bold:1, inverse:7, black:30, red:31, green:32, yellow:33, blue:34, purple:35, cyan:36, white:37, error:'31;1;7', ok:'32;1;7', warn:'33;1;7', bolder:'37;1;7', log:'34;1;7'
+  COLORS = require('tty').isatty() and not process.env.NO_COLORS
+  String._color = if COLORS then ( (k)-> -> '\x1b[' + k  + 'm' + @ + '\x1b[0m' ) else -> -> @
+  Object.defineProperty String::, name, get: String._color k for name, k of colormap
 
 $app.setMaxListeners 0
+process.title = """GEAR_#{process.pid}"""
 process.on 'exit', $app.emit.bind $app, 'exit'
 
 ### DGB DBG *     DBG DBG DBG   DBG DBG *     DBG     DBG     * DBG DBG
@@ -131,17 +123,14 @@ process.on 'exit', $app.emit.bind $app, 'exit'
     DGB     DBG   DBG           DBG     DBG   DBG     DBG   DBG     DBG
     DGB DBG *     DBG DBG DBG   DBG DBG *       * DBG DBG     * DB###
 
-$static $debug: $function
-  active:no
-  hardcore:no
-  enable:(debug=no,hardcore=no)->
-    @verbose = yes; @debug = debug || hardcore; @hardcore = hardcore
-    c._log = log = c.log unless log = ( c = console )._log; start = Date.now();
-    c.log = (args...)-> log.apply c, ['['+(Date.now()-start)+']'].concat args
-    c.verbose = log; c.debug = ( if @debug then log else $nullfn ); c.hardcore = ( if @hardcore then log else $nullfn )
-    c.log '\x1b[43;30mDEBUG MODE\x1b[0m', @debug, @hardcore, c.hardcore
-  disable:-> $debug.active = no; c = console; c.log = c._log || c.log; c.hardcore = c.debug = c.verbose = ->
-  (fn) -> do fn if $debug.active and fn and fn.call
+$static $debug: $function active:no, hardcore:no, (fn) -> do fn if $debug.active and fn and fn.call
+$debug.enable = (debug=no,hardcore=no)->
+  @verbose = yes; @debug = debug || hardcore; @hardcore = hardcore
+  c._log = log = c.log unless log = ( c = console )._log; start = Date.now();
+  c.log = (args...)-> log.apply c, ['['+(Date.now()-start)+']'].concat args
+  c.verbose = log; c.debug = ( if @debug then log else $nullfn ); c.hardcore = ( if @hardcore then log else $nullfn )
+  c.log '\x1b[43;30mDEBUG MODE\x1b[0m', @debug, @hardcore, c.hardcore
+$debug.disable = -> $debug.active = no; c = console; c.log = c._log || c.log; c.hardcore = c.debug = c.verbose = ->
 unless -3 is process.argv.indexOf('-D') + process.argv.indexOf('-d') + process.argv.indexOf('-v')
   $debug.enable -1 isnt process.argv.indexOf('-d'), -1 isnt process.argv.indexOf('-D')
 else do $debug.disable
@@ -161,40 +150,47 @@ unless -1 is process.argv.indexOf('-Q')
     REQ     REQ   REQ           REQ     *     REQ     REQ       REQ       REQ     REQ   REQ
     REQ     REQ   REQ REQ REQ     * REQ REQ     * REQ REQ   REQ REQ REQ   REQ     REQ   REQ REQ ###
 
-$static $require: $function
-  modName: (file) ->
-    f = file.replace(/\.js$/,'').replace($path.cache+'/','')
-    if $path.basename(f) is $path.basename($path.dirname f) then f = $path.dirname f else f
-  compile: (source) =>
-    dest = source.replace($path.modules,$path.cache).replace(/coffee$/,'js')
-    return dest if $fs.existsSync(dest) and Date.parse($fs.statSync(source).mtime) is Date.parse($fs.statSync(dest).mtime)
-    $fs.mkdirSync(dir) unless $fs.existsSync dir = $path.dirname(dest)
-    $fs.writeFileSync dest, '#!/usr/bin/env node\n' + $coffee.compile $fs.readFileSync source, 'utf8'
-    $fs.touch.sync dest, ref: source
-    console.debug '\x1b[32m$compiled\x1b[0m', $require.modName dest
-    dest
-  scan: (base) -> $cue.collect base,(dir,cue)->
-    $fs.readdirSync(dir).map( (i)-> $path.join dir, i ).filter (i) ->
-      return false if i is __filename or i.match 'node_modules'
-      cue i        if $fs.statSync(i).isDirectory()
-      i.match /\.(js|coffee)$/
-  all: (callback) ->
-    $require.scan($path.modules).map($require.compile).map (file)-> new $require.Module file
-    $async.series [ $require.apt.commit, $require.npm.commit ], ->
-      setImmediate retryRound = ->
-        console.hardcore 'WAITING_FOR', Object.keys($require.Module.waiting).join ' '
-        do mod.reload for name, mod of $require.Module.waiting
-        return setImmediate retryRound unless 0 is Object.keys($require.Module.waiting).length
-        $app.emit 'init', defer = $async.defer callback
-        do defer.engage
-  (callback) ->
-    return require callback if callback.match # handle: $require 'NPM-PACKAGE'
-    ( Error.prepareStackTrace = (err, stack) -> stack ); ( try err = new Error ); ( file = do -> while err.stack.length then return f if __filename isnt f = err.stack.shift().getFileName() ); ( delete Error.prepareStackTrace )
-    mod = $require.Module.byName[name = $require.modName(file)]
-    mod.deps = callback
-    do mod.checkDeps
+$static $require: (callback) ->
+  ( Error.prepareStackTrace = (err, stack) -> stack ); ( try err = new Error ); ( file = do -> while err.stack.length then return f if __filename isnt f = err.stack.shift().getFileName() ); ( delete Error.prepareStackTrace )
+  mod = $require.Module.byName[name = $require.modName(file)]
+  mod.deps = callback
+  do mod.checkDeps
+
+$require.modName = (file) ->
+  f = file.replace(/\.js$/,'').replace($path.cache+'/','')
+  if $path.basename(f) is $path.basename($path.dirname f) then f = $path.dirname f else f
+
+$require.compile = (source) =>
+  dest = source.replace($path.modules,$path.cache).replace(/coffee$/,'js')
+  return dest if $fs.existsSync(dest) and Date.parse($fs.statSync(source).mtime) is Date.parse($fs.statSync(dest).mtime)
+  $fs.mkdirSync(dir) unless $fs.existsSync dir = $path.dirname(dest)
+  $fs.writeFileSync dest, '#!/usr/bin/env node\n' + $coffee.compile $fs.readFileSync source, 'utf8'
+  $fs.touch.sync dest, ref: source
+  console.debug '\x1b[32m$compiled\x1b[0m', $require.modName dest
+  dest
+
+$require.scan = (base) -> $cue.collect base, (dir,cue)->
+  $fs.readdirSync(dir).map( (i)-> $path.join dir, i ).filter (i) ->
+    return false if i is __filename or i.match 'node_modules'
+    cue i        if $fs.statSync(i).isDirectory()
+    i.match /\.(js|coffee)$/
+
+$require.all = (callback) ->
+  $require.scan($path.modules).map($require.compile).map (file)-> new $require.Module file
+  $async.series [ $require.apt.commit, $require.npm.commit ], ->
+    setImmediate retryRound = ->
+      console.hardcore 'WAITING_FOR', Object.keys($require.Module.waiting).join ' '
+      do mod.reload for name, mod of $require.Module.waiting
+      return setImmediate retryRound unless 0 is Object.keys($require.Module.waiting).length
+      $app.emit 'init', defer = $async.defer callback
+      do defer.engage
+
+
 
 $require.Module = class GEARModule
+  @waiting: {}
+  @byPath: {}
+  @byName: {}
   constructor: (@path)->
     $require.Module.byPath[@path] = $require.Module.byName[@name = $require.modName @path] = @
     require @path
@@ -204,7 +200,8 @@ $require.Module = class GEARModule
     @loaded = false
   reload: ->
     return unless @checkDeps()
-    delete require.cache[@path]; require @path
+    delete require.cache[@path]
+    require @path
   checkDeps: ->
     done = yes; mods = $require.Module.byName
     if @deps then @deps.call {
@@ -221,54 +218,49 @@ $require.Module = class GEARModule
     if done then delete $require.Module.waiting[@name]
     else $require.Module.waiting[@name] = @
     return if done and @resolve then true else if done then @loaded = true else @loaded = false
-  @waiting: {}
-  @byPath: {}
-  @byName: {}
 
-$require.npm = $function
-  queue: {}
-  list: {}
-  source: {}
-  now: (list,callback) ->
-    return do callback if $require.npm.apply null, list
-    $require.npm.commit callback
-  commit: (callback)->
-    queue = ( n = $require.npm ).queue; n.queue = {}
-    install = Object.keys(queue).map (i)-> n.source[i] || i
-    if install.length is 0
-      return do callback
-    session = $cp.spawn 'npm', ['install'].concat(install), stdio:'inherit'
-    session.on 'close', ->
-      # require n for n in install
-      do callback
-  (list...) ->
-    n = $require.npm; wait = false
-    for k in list
-      if k.match ' '
-        [ k, url ] = k.split ' '
-        n.source[k] = url
-      n.list[k] = true
-      n.queue[k] = n.list[k] = wait = true unless $fs.existsSync $path.join $path.node_modules, k
-    not true is wait
 
-$require.apt = $function
-  queue: {}
-  missing: {}
-  commit: (callback=->)->
-    queue = $require.apt.queue; $require.apt.queue = {}
-    return do callback if ( install = ( v for k,v of queue ) ).length is 0
-    session = $sudo ['apt-get','install','--no-install-recommends','--no-install-suggests','-y'].concat(install), stdio:'inherit', (p,done)-> do done; p.on 'close', ->
-      for app, pkg of queue when not $which app
-        console.error 'ERROR:', app, 'is missing and cannot be installed'
-        # process.exit(0)
-        $require.apt.missing[app] = true
-      do callback
-  (list) ->
-    wait = false
-    for k,v of list
-      continue if $fs.existsSync(k) or $which(k) or $require.apt.missing[k]
-      wait = true ; $require.apt.queue[k] = v
-    not true is wait
+
+$require.npm = $function queue: {}, list: {}, source: {}, (list...) ->
+  n = $require.npm; wait = false
+  for k in list
+    if k.match ' '
+      [ k, url ] = k.split ' '
+      n.source[k] = url
+    n.list[k] = true
+    n.queue[k] = n.list[k] = wait = true unless $fs.existsSync $path.join $path.node_modules, k
+  not true is wait
+
+$require.npm.now = (list,callback) ->
+  return do callback if $require.npm.apply null, list
+  $require.npm.commit callback
+
+$require.npm.commit = (callback)->
+  queue = ( n = $require.npm ).queue; n.queue = {}
+  install = Object.keys(queue).map (i)-> n.source[i] || i
+  if install.length is 0
+    return do callback
+  session = $cp.spawn 'npm', ['install'].concat(install), stdio:'inherit'
+  session.on 'close', -> do callback
+
+
+
+$require.apt = $function queue: {}, missing: {}, (list) ->
+  wait = false
+  for k,v of list
+    continue if $fs.existsSync(k) or $which(k) or $require.apt.missing[k]
+    wait = true ; $require.apt.queue[k] = v
+  not true is wait
+
+$require.apt.commit = (callback=->)->
+  queue = $require.apt.queue; $require.apt.queue = {}
+  return do callback if ( install = ( v for k,v of queue ) ).length is 0
+  session = $sudo ['apt-get','install','--no-install-recommends','--no-install-suggests','-y'].concat(install), stdio:'inherit', (p,done)-> do done; p.on 'close', ->
+    for app, pkg of queue when not $which app
+      console.error 'ERROR:', app, 'is missing and cannot be installed'
+      # process.exit(0)
+      $require.apt.missing[app] = true
+    do callback
 
 ### INI INI INI  INI     INI   INI INI INI   INI INI INI
         INI      INI *   INI       INI           INI
@@ -378,9 +370,9 @@ $app.init.config = ->
 $app.init.main = ->
   argv = $app.argv
   if ( fnc = $app.cli[cmd = argv.shift()] )
-    r = fnc.apply $command, argv
+    r = fnc.apply $app, argv
+    $require.all => $app.emit 'ready'
   else process.exit 1, console.error "Command not found: ", cmd, argv
-  $require.all => $app.emit 'ready'
 
 ###   * CAC CAC     * CAC *       * CAC CAC   CAC     CAC   CAC CAC CAC
     CAC           CAC     CAC   CAC           CAC     CAC   CAC
@@ -485,65 +477,6 @@ $app.propertyAction = (mode,path,value)->
       apply i for i in items = if Array.isArray item then item else if item.list then item.list else [item]
     else apply item )
 
-### RPC RPC *     RPC RPC *       * RPC RPC
-    RPC     RPC   RPC     RPC   RPC
-    RPC RPC *     RPC RPC       RPC
-    RPC     RPC   RPC           RPC
-    RPC     RPC   RPC             * RPC ###
-
-$static
-  $$: console
-  $group: (group...,fn)-> fn.group = group.concat( fn.group || [] ); fn
-  $command: $function defaultHandler:{}, byType:{}, byName:{}, byGroup:{}, (obj)-> for k,v of obj
-    v.group = ['$local'].concat v.group || []
-    $rpc k, v
-  $rpc: $function open:{}, (key,fn)->
-    wrapper = eval """( function RPC_#{key}(){
-      args = Array.prototype.slice.call(arguments)
-      $$ = args[0] && args[0].reply && args[0].group ? args.shift() : console
-      return ( #{fn.toString().replace(/\(/,key+' (')} ).apply(this,args) } )"""
-    wrapper[k] = v for k in ['group'] when ( v = fn[k] )
-    console.hardcore '\x1b[32mcommand >>>\x1b[0m', key
-    $command.byName[key] = wrapper
-
-class $rpc.scope
-  constructor: (opts) ->
-    Object.assign @, opts
-    _cmd = @cmd
-    return @error "Command not supplied: #{_cmd}" unless @cmd
-    if Array.isArray @cmd then @args = @cmd
-    else if @cmd.split    then @args = @cmd.split /[ \t]+/
-    else return @error "Command not found: #{_cmd}"
-    @args.pop() if ( @args[@args.length-1] || '' ).toString().trim() is ''
-    @cmd = @args.shift()
-    @fnc = $command.byName[@cmd] if @cmd.match
-    return @error "Could not find #{_cmd}"                             unless @fnc?
-    return @error "Not a function #{_cmd}"                             unless @fnc.apply? or @fnc.push?
-    return @error "Access denied: #{_cmd}, no group"                   unless @group?
-    return @error "Access denied: #{_cmd}, non-rpc function"           unless @fnc.group? and Array.isArray @fnc.group
-    return @error "Access denied: have[#{@group}] need[#{@fnc.group}]" unless Array.commons(@fnc.group,@group).length > 0
-    _reply = @reply; @reply = => @finish _reply.bind @, arguments[0]
-    $rpc.open[@id = ++$rpc.serial] = @
-    # console.debug '\x1b[32mRUN\x1b[0m', @cmd, ( if @item then '$' + @item.uid else '' )
-    @defer = $async.defer =>
-      # console.debug '\x1b[32mRESULT\x1b[0m', @return
-      @reply @return unless @pipe
-    try
-      @return = @fnc.apply(@item,[@].concat @args)
-      do @defer.engage
-    catch error then @error 'exception', error.stack.toString()
-  finish: (callback) ->
-    if @done then return false else do callback
-    delete $rpc.open[@id]; @ctx = @cmd = @args = @opts = @id = null
-    @done = true
-  error: (message,object=@cmd) ->
-    console.error Peer.format(@peer), ' RPC-ERROR '.red.inverse, @cmd, message, object
-    @reply error: message, errorData: object
-
-console.rpc    =  '$local'
-console.group  = ['$local']
-console.defer  = ->->
-
 ###   * CMD CMD     * CMD *     CMD     CMD   CMD     CMD     * CMD *     CMD     CMD   CMD CMD *
     CMD           CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD   CMD *   CMD   CMD     CMD
     CMD           CMD     CMD   CMD     CMD   CMD     CMD   CMD CMD CMD   CMD CMD CMD   CMD     CMD
@@ -551,11 +484,11 @@ console.defer  = ->->
       * CMD CMD     * CMD *     CMD     CMD   CMD     CMD   CMD     CMD   CMD     CMD   CMD C ###
 
 $app.cli =
-  help:  -> console.log $command.byName.help.apply  no,arguments; process.exit 0
-  set:   -> console.log $command.byName.set.apply   no,arguments; process.exit 0
-  get:   -> console.log $command.byName.get.apply   no,arguments; process.exit 0
-  list:  -> console.log $command.byName.list.apply  no,arguments; process.exit 0
-  unset: -> console.log $command.byName.unset.apply no,arguments; process.exit 0
+  help:   (args...)-> Object.keys $app.cli
+  set: (path,value)-> $app.propertyAction 'set',  path, value
+  get:       (path)-> $app.propertyAction 'get',  path
+  list:      (path)-> $app.propertyAction 'list', path
+  unset:     (path)-> $app.propertyAction 'del',  path
   restart:->
     if $which 'systemctl' then $cp.spawnSync 'systemctl',['--user','restart','gear']
     else do process.cli.stop; do process.cli.start
@@ -610,62 +543,6 @@ $app.cli =
       when 'npm' then $require.npm.install.now pkg
       when 'sys' then $require.apt.install.now pkg
       else console.log 'Don\'t know how to install:', pkg
-
-$command help:   (args...)-> do $app.cli.help
-$command set: (path,value)-> $app.propertyAction 'set',  path, value
-$command get:       (path)-> $app.propertyAction 'get',  path
-$command list:      (path)-> $app.propertyAction 'list', path
-$command unset:     (path)-> $app.propertyAction 'del',  path
-$command shutdown:        -> process.exit 0
-$command linger:          ->
-
-$command ssh_update: $app.cli.ssh_update = (host)->
-  $async.series [
-    (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
-    (c)=> $cp.ssh( host, """
-      cd; [ -f .gear_setup.tbz ] || exit 1
-      gear-daemon stop || systemctl --user stop gear
-      mv .gear_setup.tbz .config/gear/modules/
-      cd .config/gear/modules/
-      tar xjvf .gear_setup.tbz
-      rm -rf .gear_setup.tbz
-      cd; coffee .config/gear/modules/gear.coffee install
-      """ ).on 'close', -> do c ]
-
-$command ssh_install: $app.cli.ssh_install = (host)->
-  $async.series [
-    (c)=> $cp.exec """cd #{$path.modules} && tar cjvf - * | ssh #{host} 'cd ; cat - > .gear_setup.tbz'""", => do c
-    (c)=> $cp.ssh( host, """
-      [ -f .gear_setup.tbz ] || exit 1
-      [ "$USER" = "root" ] && sudo= || sudo=sudo
-      i=" "; a=" "
-      which npm  ||                 i="$i npm"
-      which node || which nodejs || i="$i nodejs"
-      which ssh-askpass          || i="$i ssh-askpass"
-      if [ ! "x${i}x" = "x x" ]; then
-        $sudo apt-get update
-        eval $sudo apt-get -y install $i
-      fi
-      which nodejs && [ ! which node ] && $sudo ln -sf $(which nodejs) /usr/bin/node
-      which node && [ ! which nodejs ] && $sudo ln -sf $(which node) /usr/bin/nodejs
-      which node-gyp || a="$a node-gyp"
-      which coffee   || a="$a coffee-script"
-      if [ ! "x${a}x" = "x x" ]; then
-        $sudo npm -g install $a
-      fi
-      cd;
-        rm -rf .gear_setup;
-        mkdir .gear_setup;
-      cd .gear_setup
-        tar xjvf ../.gear_setup.tbz
-        rm -rf   ../.config/gear ../.gear_setup.tbz
-        coffee gear.coffee install
-      cd
-        rm .config/gear/modules &&
-        mv .gear_setup .config/gear/modules
-      echo done; read a
-      """ ).on 'close', => do c ]
-  null
 
 ###   * CLB CLB     * CLB *     CLB CLB *     CLB CLB CLB   CLB           CLB CLB CLB   CLB CLB *
     CLB           CLB     CLB   CLB     CLB   CLB           CLB               CLB       CLB     CLB

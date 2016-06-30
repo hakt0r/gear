@@ -1,6 +1,5 @@
 
-if $app? then return $app.on 'web:listening', ->
-
+if $app? then return unless $require( -> @mod 'rpc' ); return $app.on 'web:listening', ->
   $command ui_getall: -> ( v.raw for k,v of Message.byHash )
   $command ui_list:->
     format_peer = (peer)-> Object.assign {},
