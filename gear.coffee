@@ -383,23 +383,23 @@ $app.init.main = ->
       * CAC CAC   CAC     CAC     * CAC CAC   CAC     CAC   CAC CAC ###
 
 $app.init.resolveCache = ->
+  timer = null
+  $static $cache: try JSON.parse $fs.readFileSync( fpath = $path.join $path.cache, 'resolve.json' ) catch e then {}
+  $cache.write = -> clearTimeout timer; timer = setTimeout ( ->
+    $fs.writeFile fpath, JSON.stringify $cache ), 500
+  $cache.get = (key)-> $cache[key]
+  $cache.add = (key,value)-> $cache.write $cache[key] = value
+  return
   return if ( Module = require 'module' ).__resolveFilename
   console.hardcore ' RESOLVE-CACHE '.error
-  nodeModule = {}; timer = null
-  try cache = JSON.parse $fs.readFileSync( fpath = $path.join $path.cache, 'resolve.json' ) catch e then cache = {}
-  Object.keys(process.binding('natives')).forEach (n) -> nodeModule[n] = yes
+  nodeModule = {}; Object.keys(process.binding('natives')).forEach (n) -> nodeModule[n] = yes
   Module.__resolveFilename = Module._resolveFilename
   Module._resolveFilename = (r,s) ->
     return r if nodeModule[r]
-    return val if ( val = cache[cpath = if r.match /^\./ then s.filename+"///"+r else r] )?
+    return val if ( val = $cache[cpath = if r.match /^\./ then s.filename+"///"+r else r] )?
     do $cache.write
-    return cache[cpath] = try Module.__resolveFilename.call this,r,s catch e then undefined
+    return $cache[cpath] = try Module.__resolveFilename.call this,r,s catch e then undefined
   Module._resolveFilename[k] = o for k,o of Module.__resolveFilename
-  cache.write = -> clearTimeout timer; timer = setTimeout ( ->
-    $fs.writeFile fpath, JSON.stringify cache ), 500
-  cache.get = (key)-> cache[key]
-  cache.add = (key,value)-> $cache.write cache[key] = value
-  $static $cache: cache
 
 $app.init.cache = ->
   console.log 'fscache', 'active'
@@ -702,9 +702,9 @@ $async.series = (list,done=$nullfn)->
 
 $async.parallel = (list,done=$nullfn)->
   return done null, [] if list.length is null
-  finish = -> done ( if error.length is 0 then null else error ), result
   result = new Array list.length; error = new Array list.length; count=0;
-  cb = (i,fn)-> fn (error,args...)-> error[i] = error; result[i] = args; if ++count is list.length then do finish
+  finish = -> done ( if error.length is 0 then null else error ), result
+  cb = (i,fn)-> fn (e,a...)-> error[i] = e; result[i] = a; if ++count is list.length then do finish
   cb idx, fn for fn, idx in list
   null
 
