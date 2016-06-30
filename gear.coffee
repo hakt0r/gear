@@ -365,7 +365,9 @@ $app.init.config = ->
     firstRead: (config)->
       $app.on 'sync', -> $app.config.write()
       $app.init.main @data = null
-      Object.observe $config, -> do $app.sync }
+      Object.observe $config, ->
+        console.hardcore ' CONFIG-CHANGED '.warn
+        do $app.sync }
 
 $app.init.main = ->
   argv = $app.argv
@@ -388,9 +390,9 @@ $app.init.resolveCache = ->
   Object.keys(process.binding('natives')).forEach (n) -> nodeModule[n] = yes
   Module.__resolveFilename = Module._resolveFilename
   Module._resolveFilename = (r,s) ->
-    do $cache.write
     return r if nodeModule[r]
     return val if ( val = cache[cpath = if r.match /^\./ then s.filename+"///"+r else r] )?
+    do $cache.write
     return cache[cpath] = try Module.__resolveFilename.call this,r,s catch e then undefined
   Module._resolveFilename[k] = o for k,o of Module.__resolveFilename
   cache.write = -> clearTimeout timer; timer = setTimeout ( ->
@@ -443,16 +445,21 @@ $static Storage: class Storage
     return if @out
     pos = 0; @encode = new $cbor.Encoder(); data = @preWrite @data
     @encode.pipe @out = $fs.createWriteStream @temp
-    @out.on 'drain', write = =>
-      if pos > data.length
-        @out.removeListener 'drain', write
-        return @encode.end()
-      data.slice(pos,1000).map(@filter).map(@encode.write.bind @encode)
-    @out.on 'close', => $fs.rename @temp, @path, =>
-      console.log 'rename'
-      delete @out
-      do done
-    do write
+    write = @encode.write.bind @encode; len = data.length
+    @out.on 'drain', next = =>
+      console.hardcore @name.ok, ' DRAIN '.warn, pos, len
+      data.slice(pos,1000).map(@filter).map(write)
+      if ( pos += 1000 ) > len
+        @out.removeListener 'drain', next
+        @encode.end()
+      null
+    @out.on 'close', =>
+      console.hardcore @name.ok, ' CLOSE '.warn
+      $fs.rename @temp, @path, =>
+        console.hardcore @name.ok, ' RENAME '.warn
+        delete @out
+        do done
+    do next
   read:(done=$nullfn)=> $fs.exists @path, (exists)=>
     return done null, @data = @default unless exists
     $fs.createReadStream(@path).pipe(@decode).on('end',done).on('error',=> done null, @data = @default )
