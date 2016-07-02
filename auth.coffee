@@ -23,12 +23,12 @@
 
 return unless $require ->
   @npm 'node-forge'
-  @mod 'crypto'
+  @mod 'crypto', 'peer'
   @apt certutil: 'libnss3-tools'
   @defer()
 
 setImmediate ->
-  new Peer.CA
+  new Auth
   do $require.Module.byName.auth.resolve
 
 $app.on 'daemon', ->
@@ -37,8 +37,6 @@ $app.on 'daemon', ->
     delete $config.peers[i]
     new Peer.Remote p
   null
-
-$static PEER: $config.peers = $config.peers || {}
 
 $static class ACL
   @group:
@@ -55,139 +53,29 @@ $static class ACL
     return g for g,v of ACL.group when -1 isnt groups.indexOf g
     return '$public'
 
-$app.on 'daemon', -> $app.peerStore = new Storage
-  name: 'peer'
-  revive: (data)-> new Peer.Remote data
-  preWrite:-> Object.keys(Peer.byIRAC).map (i)-> Peer.byIRAC[i]
-  filter:(i)-> i.auth
-  firstRead:-> $app.on 'sync', (q,defer)-> $app.peerStore.write defer 'peers'
-
-$static class Peer
-  groups:(args...)->
-    @group = @group || ['$public']
-    @group = @group.concat args
-    @group.slice().map (g)=> @group = @group.concat add if add = ACL.group[g]
-    @group = Array.unique @group
-  register:->
-    return unless @irac
-    do $app.sync
-    Peer.byIRAC[@irac] = @
-    return unless @ra
-    l = Peer.byCA[@ra] = Peer.byCA[@ra] || list:[]
-    l.list.push l[@irac] = @
-    return
-  encodeCBOR:-> @auth
-
-Peer::error = Peer::hardcore = Peer::verbose = Peer::debug = Peer::log = (args...)->
-  console.log.apply console, [Peer.format(@)].concat args
-
-Object.defineProperty Peer::, 'auth', get:->
-  ra:@ra,ia:@ia,irac:@irac,onion:@onion,remote:@remote,cert:@cert,cachain:@cachain,group:@group
-
-class Peer.Shadow extends Peer
-  shadow:true
-  group:['$public']
-  constructor:(opts)->
-    return false
-    return false unless opts.irac
-    return peer if ( peer = PEER[opts.irac] )?
-    Object.assign @, opts
-    @ra = @ra || '00'
-    console.log Peer.format(opts), ' SHADOW '.bolder
-    PEER[@irac] = @
-    Request.static @, ['irac_peer'], $nullfn
-  toJSON:-> false
-  encodeCBOR:-> false
-
-class Peer.Remote extends Peer
-  constructor:(cert,settings)->
-    cert = ( settings = cert ).remote if cert and cert.remote
-    direction = if cert.inbound then 'in' else 'out'
-    @[k] = v for k,v of settings when v? if settings
-    unless cert? and ( cert.raw or cert.substr ) and false isnt @parseCert cert
-      console.error '  PEER WITHOUT IRAC-CERTIFICATE '.error, cert
-      return false
-    peer_exists = ( peer = PEER[@irac] )? and not peer.shadow
-    if true is peer_exists and true is cert.authorized
-      peer.onion = @onion if @onion
-      # peer.log '  EXISTING-PEER '.ok, @cachain?
-      return peer
-    if cert.authorized # XXX and not @group
-      @log  '  AUTO-PEER '.error, @irac
-      signedGroup = cert.subject.OU.toString().replace /\$local/, '$host'
-      @groups signedGroup
-    else @groups '$public'
-    do @register
-    @verbose '  PEER '.log, cert.authorized
-    Peer.sync @ if ACL.check @, '$peer'
-
-  parseCert:(cert)->
-    cert = @remote unless cert
-    # try to parse an IRAC-cert
-    sa_crt = ( if cert.substr then $pki.certificateFromPem cert else
-      $pki.certificateFromAsn1 $forge.asn1.fromDer $forge.util.createBuffer cert.raw, 'raw' )
-    @irac   = $irac sa_crt.publicKey
-    @remote = $pki.certificateToPem sa_crt
-    @onion  = sa_crt.subject.getField('O').value
-    try
-      @cachain = sa_crt.extensions.find( (i)-> i.name is 'subjectAltName').altNames.filter( (i)-> i.value.match /^irac_..\./ ).map( (i)-> i.value ).map($pki.pemCertificateFromPemURL)
-      @ra = $irac $pki.certificateFromPem(@cachain[0]).publicKey
-      @ia = $irac $pki.certificateFromPem(@cachain[1]).publicKey
-    return false unless @irac? and @ia? and @ra?
-
-Peer.fromSocket = (socket)->
-  cert = socket.getPeerCertificate yes
-  cert.inbound = socket.inbound
-  cert.authorized = socket.authorized
-  cert.authorizationError = socket.authorizationError
-  if cert.issuerCertificate and cert.inbound then try opts = cachain:[
-    $pki.certificateToPem $pki.certificateFromAsn1 $forge.asn1.fromDer $forge.util.createBuffer cert.issuerCertificate.issuerCertificate.raw, 'raw'
-    $pki.certificateToPem $pki.certificateFromAsn1 $forge.asn1.fromDer $forge.util.createBuffer cert.issuerCertificate.raw, 'raw' ]
-  peer = new Peer.Remote cert, opts
-  # peer.log  '  NETWORK-PEER '.error, cert.issuerCertificate?, cert.inbound
-  peer
-
-class Peer.CA extends Peer
-  group:  ['$local']
-  direct: yes
-  myself: yes
+class Auth extends Peer
   constructor:->
     global.$auth = Object.assign @, $config.host || {}
     @serial = @serial || @serial = 0
+    @group  =  ['$local']
     do @setupFiles
     do @setupCA
     @cachain = [
       $pki.certificateToPem @ca
       $pki.certificateToPem @intermediate_ca ]
     Object.assign @, do @setupKeys
-    Peer.byIRAC[@irac] = @
+    PEER[@irac] = @
     do @installKeys
     do @register
     Object.freeze(@group)
 
-$static PEER: Peer.byIRAC = {}
+Object.defineProperty Auth::, 'auth', get:->
+  ra:@ra,ia:@ia,irac:@irac,onion:@onion,remote:@remote,cert:@cert,cachain:@cachain,group:@group
 
-Peer.byCA = {}
+Auth::newSerial = -> @serial++
+Auth::formatSerial = -> @newSerial().toString 16
 
-Peer.format = (peer)->
-  return ' NULL '.error unless peer
-  o = []
-  o.push ( peer.onion || 'XX' ).substr(0,2).white.bold
-  o.push ( peer.irac  || 'XX' ).substr(0,2).yellow.bold
-  o.push ( peer.ia    || 'XX' ).substr(0,2).blue.bold
-  o.push ( peer.ra    || 'XX' ).substr(0,2).green.bold
-  o = o.concat ['[',peer.name.substr(0,6).green.bold,']'] if peer.name
-  o = o.join ''
-  if peer.group
-    o += '[' + ACL.highest(peer.group).white.bold + ']'
-  if peer.address
-    o + '[' + ( if peer.address is peer.irac then DIRECT[peer.address] || "n/a" else peer.address ).yellow.bold + ']'
-  else o
-
-Peer.CA::newSerial = -> @serial++
-Peer.CA::formatSerial = -> @newSerial().toString 16
-
-Peer.CA::setupKeys = (host='me')-> # onion / server / client key - package
+Auth::setupKeys = (host='me')-> # onion / server / client key - package
   exports = {}
   unless $fs.existsSync path = $path.ca host+'_onion.pem'
     o = do $onion
@@ -237,7 +125,7 @@ Peer.CA::setupKeys = (host='me')-> # onion / server / client key - package
   exports.pem = $pki.privateKeyToPem exports.key.privateKey
   exports
 
-Peer.CA::createHost = (hostname,address)->
+Auth::createHost = (hostname,address)->
   exports = @setupKeys hostname
   exports.remote = exports.cert
   exports.group = ['$host']
@@ -249,7 +137,7 @@ Peer.CA::createHost = (hostname,address)->
   delete exports.pem
   new Peer.Remote exports
 
-Peer.CA::authorize = (peer, group='$peer')->
+Auth::authorize = (peer, group='$peer')->
   return false if @caDisabled
   { irac, ia, root, onion, remote } = peer
   cert = $pki.createCertificate()
@@ -272,7 +160,7 @@ Peer.CA::authorize = (peer, group='$peer')->
   do $app.sync # save serial
   $pki.certificateToPem cert
 
-Peer.CA::signMessage = (message,key)->
+Auth::signMessage = (message,key)->
   key = ( key || @key ).privateKey
   message.irac = $auth.irac unless message.irac
   message.date = Date.now()          unless message.date
@@ -280,7 +168,7 @@ Peer.CA::signMessage = (message,key)->
   message.sign = (new Buffer key.sign(md),'binary').toString('base64')
   message
 
-Peer.CA::verifyMessage = (message,key)->
+Auth::verifyMessage = (message,key)->
   key = @key.publicKey if message.irac is $auth.irac
   unless key
     unless ( peer = PEER[message.irac] ) and ( cert = peer.remote )
@@ -293,13 +181,13 @@ Peer.CA::verifyMessage = (message,key)->
   message.sign = sign
   key.verify md.digest().bytes(), new Buffer sign, 'base64'
 
-Peer.CA::setupFiles = ->
+Auth::setupFiles = ->
   $path.ca = (args...)-> $path.join.apply $path, [$path.configDir,'ca'].concat args
   $path.cadir = $path.ca()
   unless $fs.existsSync $path.cadir
     $fs.mkdirp.sync $path.cadir # ca directory
 
-Peer.CA::setupCA = ->
+Auth::setupCA = ->
   bits = 1024
   ca_extensions = [
     { name: 'basicConstraints', cA: true }
@@ -358,7 +246,7 @@ Peer.CA::setupCA = ->
   @ra = $irac @ca.publicKey
   null
 
-Peer.CA::installKeys = ->
+Auth::installKeys = ->
   # if $auth.installed
   unless $fs.existsSync p = $path.join process.env.HOME, '.pki', 'nssdb'
     $fs.mkdirp.sync p
@@ -369,12 +257,12 @@ Peer.CA::installKeys = ->
     ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-i',$path.ca('me.p12'),'-W','']
   #  $auth.installed = true
 
-Peer.CA::attrs = (irac=@ra,ou='$ra',onion='$irac')-> return [
+Auth::attrs = (irac=@ra,ou='$ra',onion='$irac')-> return [
   { shortName: 'CN', value: irac + '.irac' }
   { shortName: 'O',  value: onion }
   { shortName: 'OU', value: ou } ]
 
-Peer.CA::rpw = (length)->
+Auth::rpw = (length)->
   r = $forge.random.createInstance()
   r.seed = Date.now() + parseInt( $md5( JSON.stringify $config ), 16 )
   $B32 r.generate(length)

@@ -84,17 +84,20 @@ global.$static = (args...) -> while a = do args.shift
   else ( global[k] = v for k,v of a )
   null
 
-global.$app =  new ( EventEmitter = require('events').EventEmitter )
-global.$os =   require 'os'
-global.$fs =   require 'fs'
-global.$cp =   require 'child_process'
-global.$util = require 'util'
-global.$path = require 'path'
-global.$logo = $logo
-global.$nullfn = ->
-global.$evented = (obj)-> Object.assign obj, EventEmitter::; EventEmitter.call obj; obj.setMaxListeners(0); return obj
-global.$function = (members,func)-> unless func then func = members else ( func[k] = v for k,v of members ); func
-global.$which = (name)-> w = $cp.spawnSync 'which',[name]; return false if w.status isnt 0; return w.stdout.toString().trim()
+$app  = new ( EventEmitter = require('events').EventEmitter )
+$os   = require 'os'
+$fs   = require 'fs'
+$cp   = require 'child_process'
+$util = require 'util'
+$path = require 'path'
+$logo = $logo
+$nullfn = ->
+$evented = (obj)-> Object.assign obj, EventEmitter::; EventEmitter.call obj; obj.setMaxListeners(0); return obj
+$function = (members,func)-> unless func then func = members else ( func[k] = v for k,v of members ); func
+$which = (name)-> w = $cp.spawnSync 'which',[name]; return false if w.status isnt 0; return w.stdout.toString().trim()
+
+$static $app:$app,$os:$os,$fs:$fs,$cp:$cp,$util:$util,$path:$path,$logo:$logo,$nullfn:$nullfn,$evented:$evented,
+  $function:$function,$which:$which
 
 unless process.version[1].match /[456]/
   console.log """ERROR: nodejs is too old
@@ -437,16 +440,16 @@ $static Storage: class Storage
     @encode.pipe @out = $fs.createWriteStream @temp
     write = @encode.write.bind @encode; len = data.length
     @out.on 'drain', next = =>
-      # console.hardcore @name.ok, ' DRAIN '.warn, pos, len
+      console.hardcore @name.ok, ' DRAIN '.warn, pos, len
       data.slice(pos,1000).map(@filter).map(write)
       if ( pos += 1000 ) > len
         @out.removeListener 'drain', next
         @encode.end()
       null
     @out.on 'close', =>
-      # console.hardcore @name.ok, ' CLOSE '.warn
+      console.hardcore @name.ok, ' CLOSE '.warn
       $fs.rename @temp, @path, =>
-        # console.hardcore @name.ok, ' RENAME '.warn
+        console.hardcore @name.ok, ' RENAME '.warn
         delete @out
         do done
     do next
@@ -467,6 +470,7 @@ $app.propertyAction = (mode,path,value)->
   id = ( path = path.split '.' ).shift(); key = path.pop()
   return false unless id and item = $app.resolveId id
   return false unless ( path.length is 0 ) or item = Object.resolve item, path.join '.'
+  do $app.sync
   apply = if mode is 'set' then set else if mode is 'get' then get else list
   # console.log mode, path, id, key, value, Object.keys item
   JSON.stringify (
