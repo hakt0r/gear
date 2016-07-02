@@ -106,9 +106,9 @@ Request.tlsOpts = (peer,protocol)->
   opts.peer = peer
   opts.requestCert = yes
   opts.rejectUnauthorized = yes
-  opts.key = $config.hostid.pem
-  opts.ca = if peer.cachain then peer.cachain else $config.hostid.cachain
-  opts.cert = peer.cert || $config.hostid.cert
+  opts.key = $auth.pem
+  opts.ca = if peer.cachain then peer.cachain else $auth.cachain
+  opts.cert = peer.cert || $auth.cert
   if peer.address
     if peer.irac then opts.url = protocol + '://' + peer.irac    + ':2003/rpc/'
     else              opts.url = protocol + '://' + peer.address + ':2003/rpc/'
@@ -192,7 +192,7 @@ Request.acceptSocket = (socket)->
     peer.lastSeen = Date.now()
     do unregister
     Message.peerLost peer
-    return if irac is $config.hostid.irac
+    return if irac is $auth.irac
     Request.connect peer
     null
   fail = (message,data)->

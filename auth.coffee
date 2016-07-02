@@ -28,12 +28,12 @@ return unless $require ->
   @defer()
 
 setImmediate ->
-  $static $auth: new Peer.CA
+  new Peer.CA
   do $require.Module.byName.auth.resolve
 
 $app.on 'daemon', ->
   console.log Peer.format($auth), '  I R A C  '.log, ( unless $auth.caDisabled then ' $ca ' else ' $host ' ).ok
-  for i,p of $config.peers when i isnt $config.hostid.irac
+  for i,p of $config.peers when i isnt $auth.irac
     delete $config.peers[i]
     new Peer.Remote p
   null
@@ -54,6 +54,13 @@ $static class ACL
   @highest:(groups)->
     return g for g,v of ACL.group when -1 isnt groups.indexOf g
     return '$public'
+
+$app.on 'daemon', -> $app.peerStore = new Storage
+  name: 'peer'
+  revive: (data)-> new Peer.Remote data
+  preWrite:-> Object.keys(Peer.byIRAC).map (i)-> Peer.byIRAC[i]
+  filter:(i)-> i.auth
+  firstRead:-> $app.on 'sync', (q,defer)-> $app.peerStore.write defer 'peers'
 
 $static class Peer
   groups:(args...)->
@@ -81,10 +88,12 @@ class Peer.Shadow extends Peer
   shadow:true
   group:['$public']
   constructor:(opts)->
+    return false
     return false unless opts.irac
     return peer if ( peer = PEER[opts.irac] )?
-    console.log Peer.format(opts), ' SHADOW '.bolder
     Object.assign @, opts
+    @ra = @ra || '00'
+    console.log Peer.format(opts), ' SHADOW '.bolder
     PEER[@irac] = @
     Request.static @, ['irac_peer'], $nullfn
   toJSON:-> false
@@ -143,8 +152,7 @@ class Peer.CA extends Peer
   direct: yes
   myself: yes
   constructor:->
-    Object.assign @, $config.hostid || {}
-    $config.hostid = @
+    global.$auth = Object.assign @, $config.host || {}
     @serial = @serial || @serial = 0
     do @setupFiles
     do @setupCA
@@ -157,7 +165,7 @@ class Peer.CA extends Peer
     do @register
     Object.freeze(@group)
 
-$static PEER: Peer.byIRAC = $config.peers
+$static PEER: Peer.byIRAC = {}
 
 Peer.byCA = {}
 
@@ -266,14 +274,14 @@ Peer.CA::authorize = (peer, group='$peer')->
 
 Peer.CA::signMessage = (message,key)->
   key = ( key || @key ).privateKey
-  message.irac = $config.hostid.irac unless message.irac
+  message.irac = $auth.irac unless message.irac
   message.date = Date.now()          unless message.date
   md = $forge.md.sha256.create().update (JSON.stringify message), 'utf8'
   message.sign = (new Buffer key.sign(md),'binary').toString('base64')
   message
 
 Peer.CA::verifyMessage = (message,key)->
-  key = @key.publicKey if message.irac is $config.hostid.irac
+  key = @key.publicKey if message.irac is $auth.irac
   unless key
     unless ( peer = PEER[message.irac] ) and ( cert = peer.remote )
       peer = new Peer.Shadow irac:message.irac
@@ -351,15 +359,15 @@ Peer.CA::setupCA = ->
   null
 
 Peer.CA::installKeys = ->
-  # if $config.hostid.installed
+  # if $auth.installed
   unless $fs.existsSync p = $path.join process.env.HOME, '.pki', 'nssdb'
     $fs.mkdirp.sync p
     $cp.spawnSync 'certutil',['-d',p,'-N']
   $cp.spawn 'certutil',
-    ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-A','-t','TCP','-n',$config.hostid.irac,'-i',$path.ca 'ca.pem']
+    ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-A','-t','TCP','-n',$auth.irac,'-i',$path.ca 'ca.pem']
   $cp.spawn 'pk12util',
     ['-d','sql:' + process.env.HOME + '/.pki/nssdb','-i',$path.ca('me.p12'),'-W','']
-  #  $config.hostid.installed = true
+  #  $auth.installed = true
 
 Peer.CA::attrs = (irac=@ra,ou='$ra',onion='$irac')-> return [
   { shortName: 'CN', value: irac + '.irac' }

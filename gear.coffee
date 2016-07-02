@@ -95,11 +95,6 @@ global.$nullfn = ->
 global.$evented = (obj)-> Object.assign obj, EventEmitter::; EventEmitter.call obj; obj.setMaxListeners(0); return obj
 global.$function = (members,func)-> unless func then func = members else ( func[k] = v for k,v of members ); func
 global.$which = (name)-> w = $cp.spawnSync 'which',[name]; return false if w.status isnt 0; return w.stdout.toString().trim()
-global.$cue = collect: (init,callback)-> # recursion unroll with callback :D
-  cue = if Array.isArray init then init else [init]
-  add = cue.push.bind cue; res = []
-  res = res.concat callback cue.shift(),add while cue.length > 0
-  return res
 
 unless process.version[1].match /[456]/
   console.log """ERROR: nodejs is too old
@@ -169,7 +164,7 @@ $require.compile = (source) =>
   console.debug '\x1b[32m$compiled\x1b[0m', $require.modName dest
   dest
 
-$require.scan = (base) -> $cue.collect base, (dir,cue)->
+$require.scan = (base) -> Object.collect base, (dir,cue)->
   $fs.readdirSync(dir).map( (i)-> $path.join dir, i ).filter (i) ->
     return false if i is __filename or i.match 'node_modules'
     cue i        if $fs.statSync(i).isDirectory()
@@ -338,36 +333,31 @@ $app.init.deps = -> # load deps, or install via npm
 
 $app.init.reload = ->
   need_restart = __filename isnt $path.join $path.cache,'gear.js'
-  need_restart_harmony = ( not Object.observe ) and not process.env.ADD_HARMONY
+  need_restart_harmony = process.requireFeature? and not process.env.RESTART_HARMONY
   if need_restart or need_restart_harmony
     args = [$require.compile $path.join $path.configDir,'modules','gear.coffee']
     if need_restart_harmony
-      process.env.ADD_HARMONY = yes
+      process.env.RESTART_HARMONY = yes
       args.unshift '--harmony_object'         if process.version[1] is '4'
       args.unshift '--harmony_object_observe' if process.version[1] is '6'
+      args = process.requireFeature.concat(args).unique
     args = args.concat $app.argv
     console.hardcore 'RE-EXECUTING', $which('node'), args
     if $cp.kexec then $cp.kexec $which('node'), args
     else return require path
-  unless Object.observe
-    console.log """ERROR: missing Object.observe
-      cannot enable at runtime
-      use: --harmony_object
-       or: --harmony_object_observe"""
-    process.exit 1
 
 $app.init.config = ->
-  $app.config = new Storage {
+  $app.config = new Storage
     default: global.$config = {}
     name: 'config'
     preWrite:-> return ( [k,v] for k,v of $config )
     revive:(d)-> $config[d[0]] = d[1]
     firstRead: (config)->
-      $app.on 'sync', -> $app.config.write()
-      $app.init.main @data = null
-      Object.observe $config, ->
+      global.$config = Object.monitor $config, ->
         console.hardcore ' CONFIG-CHANGED '.warn
-        do $app.sync }
+        do $app.sync
+      $app.on 'sync', -> $app.config.write()
+      do $app.init.main
 
 $app.init.main = ->
   argv = $app.argv
@@ -447,16 +437,16 @@ $static Storage: class Storage
     @encode.pipe @out = $fs.createWriteStream @temp
     write = @encode.write.bind @encode; len = data.length
     @out.on 'drain', next = =>
-      console.hardcore @name.ok, ' DRAIN '.warn, pos, len
+      # console.hardcore @name.ok, ' DRAIN '.warn, pos, len
       data.slice(pos,1000).map(@filter).map(write)
       if ( pos += 1000 ) > len
         @out.removeListener 'drain', next
         @encode.end()
       null
     @out.on 'close', =>
-      console.hardcore @name.ok, ' CLOSE '.warn
+      # console.hardcore @name.ok, ' CLOSE '.warn
       $fs.rename @temp, @path, =>
-        console.hardcore @name.ok, ' RENAME '.warn
+        # console.hardcore @name.ok, ' RENAME '.warn
         delete @out
         do done
     do next
@@ -615,19 +605,53 @@ Object.resolve = (o,path)->
   return o
 
 Object.unroll = (obj, handle)->
-  cue = []
-  push = (o)-> cue.push o
-  push obj
-  while cue.length > 0
-    for k,v of o = do cue.shift
-      handle v, push, typeof v is 'object' and not Array.isArray v
+  cue = [].concat obj; cat = cue.concat.bind cue
+  if typeof o is 'object' and not Array.isArray o then cat o else handle o, cat while o = do cue.shift
   null
+
+Object.collect = (obj,handle)->
+  res = []; cue = [].concat obj; push = cue.push.bind cue; push = cue.push.bind cue
+  res = res.concat handle cue.shift(), push while cue.length > 0
+  return res
 
 Object.trim = (map)->
   for key,val of map
     delete map[key] if Array.isArray(val)  and val.length is 0
     delete map[key] if typeof val is 'object' and Object.keys(val).length is 0
   map
+
+if ( not Object.monitor? ) and Proxy? then do ->
+  monitor_stack = (obj,handler)->
+    has: (name) -> return name in obj
+    keys: keys = -> Object.keys obj
+    ownKeys: keys
+    set: (receiver, name, val) ->
+      handler 'set', obj, name, obj[name] = ( if val? and ( c = val.__TARGET__ )? then c else val ); true
+    delete: (name) -> handler 'del', obj, name; delete obj[name]
+    get: (receiver, name) ->
+      return undefined             unless ( v = obj[name] )?
+      return v                         if name is '__TARGET__'
+      return fn.bind obj               if fn = Object::[name]
+      return Object.monitor v, handler if typeof v is 'object'
+      return v
+    enumerate: -> Object.keys obj
+    iterate: -> p = keys(); i = 0; l = p.length; return next: -> if i is l then throw StopIteration else p[i++]
+    getOwnPropertyDescriptor: (name) -> desc.configurable = true unless undefined is desc = Object.getOwnPropertyDescriptor(obj, name); desc
+  ES6Proxy    = (obj,f,p='@')-> new Proxy obj, monitor_stack obj.__TARGET__ || obj, f
+  NodeJSProxy = (obj,f,p='@')-> Proxy.create   monitor_stack obj.__TARGET__ || obj, f
+  Object.monitor = if Proxy.create then NodeJSProxy else ES6Proxy
+  Object.isMonitored = (o)-> o.__TARGET__?
+  Object.pure = (o)-> o.__TARGET__ || o
+else if process and process.versions.node and not process.env.RESTART_HARMONY
+  l = process.requireFeature = process.requireFeature = []
+  l.push f if -1 is l.indexOf f = '--harmony-proxies'
+else console.error """
+  ERROR: Can't enable ( Object.monitor )
+  - this practically means there are no ES-Proxies available.
+  - Please update your JS-engine or install a supplemantary plugin
+    and require it in: {$path.join $path.configDir,'hacks.js'}
+  DEVELOPER INFORMATION: #{JSON.stringify platform:process.platform, arch: process.arch, version:process.versions}
+"""; process.exit 1
 
 ### $pipe tools ###
 $static $pipe: catchErrors: (p)->
@@ -716,11 +740,12 @@ $async.limit = (token,timeout,callback)->
   $limit[token] = setTimeout callback, 0
 
 $async.cue = (worker)->
-  cue = []; running = no
+  q = (task...)-> tip cue.push task
+  q.cue = cue = []; running = no
   tip = -> unless running
     return running = no unless task = cue.shift()
     running = yes; worker task, -> tip running = no
-  (task...)-> tip cue.push task
+  return q
 
 $async.debug = (e,c,o=5000)-> late = no; return (d) ->
   console.hardcore '+>>', e

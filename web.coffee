@@ -23,7 +23,7 @@ return unless $require ->
   @npm 'express','ws','compression','morgan','body-parser','serve-static'
   @mod 'auth'
 
-$config.web  = $config.web || port:2003
+$config.web  = $config.web  || port:2003
 $config.meta = $config.meta || {}
 $static $web: require('express')()
 
@@ -64,9 +64,9 @@ $app.on 'daemon', ->
   $web.https = require('https').createServer(
     requestCert: yes
     rejectUnauthorized: no
-    ca:   $config.hostid.cachain
-    key:  $config.hostid.pem
-    cert: $config.hostid.cert )
+    ca:   $auth.cachain
+    key:  $auth.pem
+    cert: $auth.cert )
   WebSocketServer = require('ws').Server
   $web.wss = new WebSocketServer server:$web.https
   $web.https.on 'request', (req,res)->

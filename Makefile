@@ -3,8 +3,8 @@ run:
 	coffee gear.coffee daemon -D 2>&1
 
 debunk:
-	scp -r * ulzq.de:.config/gear/modules/
-	scp -r * tycho.fritz.box:.config/gear/modules/
+	scp -r * ulzq.de:.config/gear/modules/ &
+	scp -r * tycho.fritz.box:.config/gear/modules/ &
 	make cached
 
 cached:
@@ -20,7 +20,7 @@ install:
 	coffee gear.coffee install 2>&1
 
 debug:
-	coffee --nodejs debug gear.coffee daemon -D 2>&1
+	coffee --nodejs --harmony-proxies --nodejs debug gear.coffee daemon -D 2>&1
 
 debug-inspector:
 	coffee --nodejs debug gear.coffee daemon -D 2>&1

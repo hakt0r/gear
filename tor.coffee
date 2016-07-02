@@ -22,7 +22,7 @@
 return unless $require ->
   @apt tor: 'tor'
   @mod 'task'
-  @mod 'auth' unless $config.hostid and $config.hostid.onion
+  @mod 'auth' unless $auth? and $auth.onion?
 
 $path.tor   = $path.join $path.configDir,'tor'
 $path.torrc = $path.join $path.tor, 'torrc'
@@ -32,13 +32,13 @@ $config.tor.port   = $config.tor.port || 2004
 $config.tor.ctrl   = $config.tor.ctrl || 2005
 $config.tor.active = Boolean.default $config.tor.active, true
 
-$app.on 'tor:connecting', (p) -> console.log 'tor[' + $config.hostid.onion + ':' + p + '0%]'
-$app.on 'tor:connected',      -> console.log 'tor[' + $config.hostid.onion + ':online]'
+$app.on 'tor:connecting', (p) -> console.log 'tor[' + $auth.onion + ':' + p + '0%]'
+$app.on 'tor:connected',      -> console.log 'tor[' + $auth.onion + ':online]'
 $app.on 'daemon', ->
   return if $config.tor.active is false
   return unless $fs.existsSync path = $path.ca 'me_onion.pub'
   o = $onion $fs.readFileSync path, 'utf8'
-  $config.hostid.onion = o.onion
+  $auth.onion = o.onion
   $fs.mkdirp.sync path unless $fs.existsSync path = $path.tor
   $fs.chmodSync path, parseInt '700', 8
   $fs.writeFileSync $path.torrc, """

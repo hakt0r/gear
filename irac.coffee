@@ -45,7 +45,7 @@ $static class Message
       fail ' INCOMPLETE-MESSAGE ', opts
       return false
     unless true is @verified = $auth.verifyMessage @raw
-      if false is @verified then fail ' INVALID-MESSAGE ', opts
+      if false is @verified then fail ' INVALID-MESSAGE ', opts.hash
       else Message.pendingVerification @peer, @hash, @raw
       return false
     @date = Date.now() unless @date
@@ -127,7 +127,7 @@ Message.resolveTag = (tag,create=on)->
 Message.getBlob = (hash,peer)->
   return if $fs.existsSync link = $path.sharedHash hash
   console.debug ' IRAC-GET-BLOB '.warn, hash
-  return if $config.hostid.irac is peer.irac
+  return if $auth.irac is peer.irac
   Request.pipe peer, ['irac_get',hash], $fs.createWriteStream link if peer
   # TODO: $dht.search hash, (peer)-> ...
 
@@ -197,23 +197,23 @@ $static class MessageSync
 
   @queue: {}
   @distribute: (source,items)->
-    console.debug ' MESSAGE-DISTRIBUTE '.bolder, items.length
+    # console.debug ' MESSAGE-DISTRIBUTE '.bolder, items.length
     queue = MessageSync.queue
     connected = Request.connected
-    source = $config.hostid unless source?
-    for irac, socket of connected when irac isnt source.irac or irac is $config.hostid.irac
+    source = $auth unless source?
+    for irac, socket of connected when irac isnt source.irac or irac is $auth.irac
       Array.blindConcat MessageSync.queue, irac, items.filter (i)-> MessageFilter socket.peer
     do @trigger
   @trigger: $async.pushup deadline:100, threshold:100, worker: (cue, done)->
     $app.sync()
-    console.debug ' MESSAGE-QUEUE '.bolder
+    # console.debug ' MESSAGE-QUEUE '.bolder
     send = (irac,list)->
-      console.debug ' SEND '.bolder, irac, list.length
+      # console.debug ' SEND '.bolder, irac, list.length
       return unless peer = PEER[irac]
       return unless 0 < list.length
-      peer.hardcore ' PUBLISHING '.bolder, list.length
+      # peer.hardcore ' PUBLISHING '.bolder, list.length
       ( new MessageSync peer ).request( push:list.map (i)-> i.raw ).once 'sync', ->
-        peer.hardcore  ' PUBLISHED '.bolder, list.length
+        # peer.hardcore  ' PUBLISHED '.bolder, list.length
       MessageSync.queue[irac] = []
     send irac, list for irac, list of MessageSync.queue
     done null
@@ -240,7 +240,7 @@ MessageFilter.add = (type,callback)->
 
 MessageFilter.add 'x-irac/peer', (peer,i)->
   return false unless peer? and i? and ACL.check peer, '$local', '$host', '$peer'
-  return false if ( i.irac is peer.irac ) or ( i.irac is $config.hostid.irac )
+  return false if ( i.irac is peer.irac ) or ( i.irac is $auth.irac )
   return true
 
 ###
@@ -250,22 +250,22 @@ MessageFilter.add 'x-irac/peer', (peer,i)->
 $command irac_peer: $group '$public', (ack)->
   { irac, root, onion, ia } = peer = $$.peer
   accept = (peer,ack)->
-    peer = new Peer.Remote remote:peer.cert, cert:ack
-    peer.log ' PEERED-WITH '.ok
-    setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
+    do $app.sync
     peer.groups '$peer'
     peer.cert = ack
-    do $app.sync
-  if ack?
+    peer.log ' PEERED-WITH '.ok
+    setTimeout ( -> Peer.sync peer, (error)-> ), 1000 # TODO: distrust on error
+  unless ack?
+    Object.assign peer, cert:no, remote: hisCert = $auth.authorize peer
+    Request.static peer, [ 'irac_peer', hisCert ], (error,req,myCert)->
+      return console.error error if error
+      accept peer, myCert
+      null
+    'calling_back'
+  else
     Object.assign peer, remote:hisCert = $auth.authorize peer
     accept peer, ack
     return hisCert
-  Object.assign peer, cert:no, remote: hisCert = $auth.authorize peer
-  Request.static peer, [ 'irac_peer', hisCert ], (error,req,myCert)->
-    return console.error error if error
-    accept peer, myCert
-    null
-  'calling_back'
 
 $command irac_sync: $group '$peer', (opts)->
   ( new MessageSync $$.peer, inbound:true ).query opts
@@ -331,9 +331,9 @@ $static class IRACStream
     @msg = new Message peer:$auth, raw: $auth.signMessage Object.assign opts,
       tag:opts.tag
       date:date=Date.now()
-      irac:$config.hostid.irac
+      irac:$auth.irac
       body:opts.body||'= Media Stream ='
-      hash:@hash = $sha1 $config.hostid.ra + $config.hostid.irac + date + opts.tag.join ''
+      hash:@hash = $sha1 $auth.ra + $auth.irac + date + opts.tag.join ''
     IRACStream.byHash[@hash] = @
     @path = $path.sharedHash @hash
     $config.meta[@hash] = @msg.raw
